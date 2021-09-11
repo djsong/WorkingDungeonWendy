@@ -3,7 +3,7 @@ Virtual world capturing and transferring desktop image to simulate virtual offic
 
 I don't have a plan to upload the whole sources that make it get compiled as downloaded.
 You need to download the UnrealEngine by yourself, setup to get it compiled,
-then put downloaded files under the root path.
+then put Wendy files under the root path.
 Project name is Wendy.
 
 2021.09.11
