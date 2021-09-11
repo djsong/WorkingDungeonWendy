@@ -3,7 +3,7 @@ Wendy - Working Dungeon
 ===================================
 
 2021.09.11
-	Git 에 올리기 위한 정리..
+	코드랑 컨텐츠 등등 정리 좀 하고 Git 에 올림. (https://github.com/djsong/WorkingDungeonWendy)
 
 2021.09.09
 	약간의 정리.. 공개 repository 올리기 위한 단순한 맵이랑 WendyGameSettings ..
