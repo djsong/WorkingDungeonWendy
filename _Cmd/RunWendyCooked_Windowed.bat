@@ -1,0 +1,1 @@
+Wendy.exe -resx=1280 -resy=720 -windowed

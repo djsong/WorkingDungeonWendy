@@ -1,0 +1,1 @@
+..\Engine\Binaries\Win64\UE4Editor.exe "../Wendy/Wendy.uproject" -game -windowed -resx=1280 -resy=720 -AllowServerSelection
