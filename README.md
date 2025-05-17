@@ -17,5 +17,5 @@ The first repository creation.
 Unreal version 4.26.2
 
 2025.05.17
-Implemented custom image replication networking, a lot faster and stable for two users (one server and one client), but not guaranteed for more than two clients
+Implemented custom image replication networking, a lot faster and stable for two users (one server and one client), but not guaranteed for more than two clients.
 Now based on Unreal Engine 5.5
