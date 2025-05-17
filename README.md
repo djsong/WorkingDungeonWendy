@@ -1,6 +1,8 @@
 # WorkingDungeonWendy
 A virtual world capturing and transferring desktop image to simulate virtual office, based on Unreal Engine.
 
+Refer to the blog posting: https://blog.naver.com/sdj00001/223868643141
+
 --------------------------------
 
 I don't have a plan to upload the whole sources that make it get compiled as downloaded.
