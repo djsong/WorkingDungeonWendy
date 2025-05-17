@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/GameModeBase.h"
+#include "WendyImageRepNetwork.h"
 #include "WendyGameMode.generated.h"
 
 /**
@@ -16,7 +17,10 @@ class AWendyGameMode : public AGameModeBase
 
 public:
 	AWendyGameMode(const FObjectInitializer& ObjectInitializer);
-};
 
+	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+
+};
 
 

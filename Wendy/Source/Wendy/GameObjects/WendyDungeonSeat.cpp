@@ -117,10 +117,15 @@ FRotator AWendyDungeonSeat::GetOriginRot() const
 	return (RelativeOriginComp != nullptr) ? RelativeOriginComp->GetComponentRotation() : GetActorRotation();
 }
 
-//bool AWendyDungeonSeat::IsOccupied() const
-//{
-//
-//}
+void AWendyDungeonSeat::SetOwnerCharacter(AWendyCharacter* InCharacter)
+{
+	OwnerCharacter = InCharacter;
+}
+
+bool AWendyDungeonSeat::IsOccupied() const
+{
+	return OwnerCharacter.IsValid();
+}
 
 /////////////////////////////////////////////////////////////////
 

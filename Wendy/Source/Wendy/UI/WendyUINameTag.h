@@ -19,6 +19,8 @@ protected:
 	UPROPERTY(Transient, meta=(BindWidget))
 	UWdTextBlock* TB_UserId;
 
+	UPROPERTY(Transient, meta = (BindWidget))
+	UWdTextBlock* TB_ChatMessage;
 
 public:
 	UWendyUINameTag(const FObjectInitializer& ObjectInitializer);
@@ -26,5 +28,7 @@ public:
 	virtual void StaticWidgetPreparations() override;
 
 	void SetUserId(const FString& InUserId);
+
+	void SetChatMessage(const TArray<FString>& InChatMessages);
 };
 

@@ -25,3 +25,15 @@ AWendyGameMode::AWendyGameMode(const FObjectInitializer& ObjectInitializer)
 
 	GameStateClass = AWendyGameState::StaticClass();
 }
+
+void AWendyGameMode::BeginPlay()
+{
+	Super::BeginPlay();
+
+}
+
+void AWendyGameMode::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+
+	Super::EndPlay(EndPlayReason);
+}

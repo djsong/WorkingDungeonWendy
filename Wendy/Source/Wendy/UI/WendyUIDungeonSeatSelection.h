@@ -74,7 +74,9 @@ public:
 	UWendyUIDungeonSeatSelection(const FObjectInitializer& ObjectInitializer);
 
 	virtual void NativeOnInitialized() override;
+	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
 	virtual void StaticWidgetPreparations() override;
+	
 
 private:
 	/** Main entry to dynamically generate the main working elements here. */
@@ -100,11 +102,12 @@ private:
 	UFUNCTION()
 	void OnAnySelectionCheckStateChanged(bool bChecked);
 
+	void UpdateSeatOccupiedState();
+
 public:
 	/** Get's the DPI scale value defined by UserInterfaceSettings. Might be referred from outside..? */
 	static float GetCurrViewDPIScale(UObject* WorldContextObject);
 
 private:
-
 };
 

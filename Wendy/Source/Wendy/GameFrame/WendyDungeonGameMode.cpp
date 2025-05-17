@@ -23,3 +23,8 @@ AWendyDungeonGameMode::AWendyDungeonGameMode(const FObjectInitializer& ObjectIni
 	PlayerControllerClass = AWendyDungeonPlayerController::StaticClass();
 	GameStateClass = AWendyDungeonGameState::StaticClass();
 }
+
+void AWendyDungeonGameMode::BeginPlay()
+{
+	Super::BeginPlay();
+}

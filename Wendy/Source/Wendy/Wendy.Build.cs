@@ -19,8 +19,9 @@ public class Wendy : ModuleRules
             "RenderCore",
             "Slate",
             "SlateCore",
-            "UMG"
-        });
+            "UMG",
+			"Sockets"
+		});
 
         PublicIncludePaths.AddRange(new string[] {
             "Wendy",

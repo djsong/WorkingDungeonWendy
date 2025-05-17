@@ -34,6 +34,6 @@ void AWendyDungeonPlayerController::OnPossess(APawn* aPawn)
 		// Assumes that local DungeonPlayerController is created after logging in from lobby UI and entering the wendy world.
 		// This is the first step that AccountInfo goes for replication.. to the server (RPC) and to other client (as remote)
 		FWendyDataStore& WendyDataStore = GetGlobalWendyDataStore();
-		AsWendyChar->SetConnectedUserAccountInfo(WendyDataStore.UserAccountInfo);
+		AsWendyChar->SetConnectedUserAccountInfo(WendyDataStore.GetUserAccountInfo());
 	}
 }

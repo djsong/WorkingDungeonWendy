@@ -13,10 +13,29 @@
  ==========================================================
  */
 
-/**
- * As we don't have some UI layering and managing system.. Let's go simple 
- */
+
+DECLARE_LOG_CATEGORY_EXTERN(LogWendy, Log, All);
+
+
+ /**
+  * As we don't have some UI layering and managing system.. Let's go simple
+  */
 const int32 WD_MAIN_UI_ZORDER = 0;
+
+/**
+ * It can be sent through network with fixed length buffer, so need limitation. (+1 for null termination)
+ * I don't know why, just having trouble with declaring it as const int32..
+ */
+#define WD_USER_ID_MAX_LEN 12
+#define WD_USER_ID_MAX_LEN_PLUS_ONE (WD_USER_ID_MAX_LEN + 1)
+FORCEINLINE const FString GetClampedWendyUserIdString(const FString& InRawStr)
+{
+	if (InRawStr.Len() >= WD_USER_ID_MAX_LEN_PLUS_ONE)
+	{
+		return InRawStr.LeftChop(InRawStr.Len() - WD_USER_ID_MAX_LEN_PLUS_ONE + 1);
+	}
+	return InRawStr;
+}
 
 /** Collections of things necessary to enter the main world,
  * mostly for server connection? */

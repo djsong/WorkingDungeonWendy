@@ -6,12 +6,15 @@
 #include "WendyCharacter.h"
 #include "WendyDungeonPlayerController.h"
 #include "WendyUIDungeonSeatSelection.h"
+#include "WendyHudUI.h"
 
 AWendyDungeonGameState::AWendyDungeonGameState(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 {
 	SeatSelectionUIClass = nullptr;
 	SeatSelectionUIWidget = nullptr;
+	HudUIClass = nullptr;
+	HudUIWidget = nullptr;
 	CurrentPhase = EWendyDungeonPhase::WDP_SeatSelection;
 }
 
@@ -43,7 +46,7 @@ void AWendyDungeonGameState::DestroySeatSelectionUI()
 
 	if (SeatSelectionUIWidget != nullptr)
 	{
-		SeatSelectionUIWidget->RemoveFromViewport();
+		SeatSelectionUIWidget->RemoveFromParent();
 		SeatSelectionUIWidget->ConditionalBeginDestroy();
 		SeatSelectionUIWidget = nullptr;
 	}
@@ -65,6 +68,19 @@ void AWendyDungeonGameState::GoToSeatSelection()
 	}
 }
 
+void AWendyDungeonGameState::CreateHudUIWidget()
+{
+	UWorld* OwnerWorld = GetWorld();
+	if (HudUIClass != nullptr && IsValid(OwnerWorld))
+	{
+		HudUIWidget = CreateWidget<UWendyHudUI>(OwnerWorld, HudUIClass);
+		if (HudUIWidget != nullptr)
+		{
+			HudUIWidget->AddToViewport(WD_MAIN_UI_ZORDER);
+		}
+	}
+}
+
 void AWendyDungeonGameState::AdvancePhase()
 {
 	switch (CurrentPhase)
@@ -73,6 +89,7 @@ void AWendyDungeonGameState::AdvancePhase()
 
 		// Other handlings regarding seat selecation should be done at this point.
 		DestroySeatSelectionUI();
+		CreateHudUIWidget();
 
 		CurrentPhase = EWendyDungeonPhase::WDP_Working;
 

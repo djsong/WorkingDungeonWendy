@@ -46,6 +46,8 @@ protected:
 	 * Its lifetime is not managed here, so tracking it with weak ptr. */
 	TWeakObjectPtr<UTexture2D> DesktopImageTexture;
 
+	/** The character who occupied this seat. If invalid there's no one. */
+	TWeakObjectPtr<AWendyCharacter> OwnerCharacter;
 
 public:
 	/** Name of the material slot that will be applied captured desktop image.
@@ -75,8 +77,8 @@ public:
 	FVector GetOriginPos() const;
 	FRotator GetOriginRot() const;
 
-	/** Need some like this .. True if there's a WendyCharacter having myself as a HomeSeat. */
-	//bool IsOccupied() const;
+	void SetOwnerCharacter(AWendyCharacter* InCharacter);
+	bool IsOccupied() const;
 };
 
 /** It could be just a FVector (and optionally FRotator), but for a little convenience.. */

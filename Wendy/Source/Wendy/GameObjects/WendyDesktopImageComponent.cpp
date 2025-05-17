@@ -98,7 +98,12 @@ void UWendyDesktopImageComponent::TickComponent(float DeltaTime, enum ELevelTick
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
-	if (ShouldCaptureLocalImage() && bDirtyForReplication == false )
+	if (ShouldCaptureLocalImage() 
+		
+		// Is checking bDirtyForReplication necessary? and even proper when the staging size is not ensured to be the same as replicating size?
+		//&& bDirtyForReplication == false 
+		
+		)
 	{
 		// Won't do the direct capturing job here. It will do some incremental converting..
 		UpdateLocalDesktopCaptureStaging();
@@ -403,12 +408,12 @@ void UWendyDesktopImageComponent::UpdateOutputTexture()
 
 	if (bDirtyForTextureUpdate 
 		&& bTimeToUpdate
-		&& IsValid(OutputTexture) && OutputTexture->PlatformData != nullptr && OutputTexture->PlatformData->Mips.Num() > 0)
+		&& IsValid(OutputTexture) && OutputTexture->GetPlatformData() != nullptr && OutputTexture->GetPlatformData()->Mips.Num() > 0)
 	{
 		///////////////////////////////////
 		// Update itself
 
-		FTexture2DMipMap& MipRef = OutputTexture->PlatformData->Mips[0];
+		FTexture2DMipMap& MipRef = OutputTexture->GetPlatformData()->Mips[0];
 		{  
 			FColor* MipData = reinterpret_cast<FColor*>(MipRef.BulkData.Lock(LOCK_READ_WRITE));
 
@@ -466,10 +471,12 @@ void UWendyDesktopImageComponent::ExtractReplicateInfo(FWendyDesktopImageReplica
 	// It is assume that this function is called per replication interval,
 	// but how often repliation being handled? like once in a tick?
 
-	if (bDirtyForReplication)
+
+	// Is checking bDirtyForReplication necessary? and even proper when the staging size is not ensured to be the same as replicating size?
+	// if (bDirtyForReplication) 
 	{
-		OutReplicateInfo.UpdateBeginIndex = FMath::Max(LastReplicatedImageDataIndex + 1, 0);
-		if (OutReplicateInfo.UpdateBeginIndex >= SourceImageData.Num())
+		OutReplicateInfo.UpdateBeginIndex = FMath::Max(LastReplicatedImageDataIndex, 0);
+		if (OutReplicateInfo.UpdateBeginIndex >= SourceImageData.Num() - 1)
 		{
 			OutReplicateInfo.UpdateBeginIndex = 0;
 		}
@@ -501,7 +508,7 @@ void UWendyDesktopImageComponent::ExtractReplicateInfo(FWendyDesktopImageReplica
 			RepColorRef.B = SrcColor.B;
 		}
 
-		bDirtyForReplication = false;
+		//bDirtyForReplication = false;
 	}
 }
 

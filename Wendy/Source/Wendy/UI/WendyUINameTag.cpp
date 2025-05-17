@@ -25,3 +25,22 @@ void UWendyUINameTag::SetUserId(const FString& InUserId)
 		TB_UserId->SetText(FText::FromString(InUserId));
 	}
 }
+
+void UWendyUINameTag::SetChatMessage(const TArray<FString>& InChatMessages)
+{
+	if (TB_ChatMessage != nullptr)
+	{
+		FString ChatMessageSingleString;
+		for (int32 MI = 0; MI < InChatMessages.Num(); ++MI)
+		{
+			const FString& ChtMsg = InChatMessages[MI];
+			ChatMessageSingleString += ChtMsg;
+			if (MI < InChatMessages.Num() - 1)
+			{
+				ChatMessageSingleString += TEXT("\r\n");
+			}
+		}
+
+		TB_ChatMessage->SetText(FText::FromString(ChatMessageSingleString));
+	}
+}

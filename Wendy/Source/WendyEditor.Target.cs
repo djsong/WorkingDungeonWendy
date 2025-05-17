@@ -8,7 +8,7 @@ public class WendyEditorTarget : TargetRules
 	public WendyEditorTarget(TargetInfo Target) : base(Target)
 	{
 		Type = TargetType.Editor;
-		DefaultBuildSettings = BuildSettingsVersion.V2;
+		DefaultBuildSettings = BuildSettingsVersion.Latest;
 		ExtraModuleNames.Add("Wendy");
 	}
 }

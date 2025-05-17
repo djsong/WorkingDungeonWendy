@@ -19,5 +19,8 @@ class AWendyDungeonGameMode : public AWendyGameMode
 public:
 	AWendyDungeonGameMode(const FObjectInitializer& ObjectInitializer);
 
+	virtual void BeginPlay() override;
+
+	
 };
 

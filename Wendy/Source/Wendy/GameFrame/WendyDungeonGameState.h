@@ -7,6 +7,7 @@
 #include "WendyDungeonGameState.generated.h"
 
 class UWendyUIDungeonSeatSelection;
+class UWendyHudUI;
 
 /** Some flow state for dungeon game.. Not really need to be replicated? */
 UENUM()
@@ -41,6 +42,12 @@ protected:
 	UPROPERTY(Transient)
 	UWendyUIDungeonSeatSelection* SeatSelectionUIWidget;
 
+	UPROPERTY(EditAnywhere, Category = "WendyDungeonGameState")
+	TSubclassOf<UWendyHudUI> HudUIClass;
+
+	UPROPERTY(Transient)
+	UWendyHudUI* HudUIWidget;
+
 	/** Somewhat like MatchState of GameMode..? */
 	UPROPERTY(Transient)
 	EWendyDungeonPhase CurrentPhase;
@@ -58,12 +65,12 @@ protected:
 	/** As the first phase, specially provide its own entering method, and let other phases use AdvancePhase? */
 	void GoToSeatSelection();
 
+	void CreateHudUIWidget();
+
 public:
 	/** It should include some specific handling for each phase transition. */
 	void AdvancePhase();
 
 	FORCEINLINE EWendyDungeonPhase GetCurrentPhase() const { return CurrentPhase; }
 };
-
-
 

@@ -42,6 +42,19 @@ UWendyLobbyUI::UWendyLobbyUI(const FObjectInitializer& ObjectInitializer)
 	}
 }
 
+void UWendyLobbyUI::NativeDestruct()
+{
+	Super::NativeDestruct();
+
+	if (IsValid(ET_UserId))
+	{
+		//ET_UserId->SetHintText();
+
+		ET_UserId->OnTextChanged.RemoveAll(this);
+
+	}
+}
+
 void UWendyLobbyUI::StaticWidgetPreparations()
 {
 	// @TODO Wendy LOCTEXT
@@ -59,7 +72,10 @@ void UWendyLobbyUI::StaticWidgetPreparations()
 	}
 	if (ET_UserId != nullptr)
 	{
-		//ET_UserId->SetHintText();
+		//ET_UserId->SetHintText(FText::FromString(FString::Printf(TEXT("Max length %d"), WD_USER_ID_MAX_LEN)));
+
+		ET_UserId->OnTextChanged.AddDynamic(this, &UWendyLobbyUI::OnUserIdTyped);
+
 	}
 	if (ET_ServerAddr != nullptr)
 	{
@@ -90,6 +106,18 @@ void UWendyLobbyUI::OnEnterWendyClick()
 
 		// Might pop-up some?
 
+	}
+}
+
+void UWendyLobbyUI::OnUserIdTyped(const FText& InText)
+{
+	if (InText.ToString().Len() >= WD_USER_ID_MAX_LEN_PLUS_ONE)
+	{
+		if (IsValid(ET_UserId))
+		{
+			ET_UserId->SetText(FText::FromString(GetClampedWendyUserIdString(InText.ToString())));
+			UE_LOG(LogWendy, Log, TEXT("User Id is being clamped by limitation %d"), WD_USER_ID_MAX_LEN);
+		}		
 	}
 }
 

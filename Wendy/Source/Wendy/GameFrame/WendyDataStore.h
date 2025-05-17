@@ -10,12 +10,14 @@
  */
 class FWendyDataStore
 {
+	FWendyAccountInfo UserAccountInfo;
+
 public:
 	FWendyDataStore();
 	~FWendyDataStore();
 
-	FWendyAccountInfo UserAccountInfo;
-
+	void SetUserAccountInfo(const FWendyAccountInfo& InAccountInfo);
+	const FWendyAccountInfo& GetUserAccountInfo() const { return UserAccountInfo; }
 };
 
 FWendyDataStore& GetGlobalWendyDataStore();

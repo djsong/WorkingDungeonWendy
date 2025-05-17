@@ -11,6 +11,7 @@ class AWendyDungeonSeat;
 class UWidgetComponent;
 class UWendyDesktopImageComponent;
 
+
 /** Not in byte.. element number. */
 int32 GetWdDesktopImageReplicateElemSize();
 
@@ -100,12 +101,7 @@ protected:
 
 	UPROPERTY(VisibleAnywhere)
 	UWendyDesktopImageComponent* DesktopImageComponent;
-	/** Transferred intermediate desktop color data.
-	 * At the moment of receiving it, it is used to update the final buffer, not being used in this format itself.
-	 * In the case of AutonomousProxy, it is the intermediate data to be sent */
-	UPROPERTY(ReplicatedUsing = OnRep_ReplicatedDesktopImage)
-	FWendyDesktopImageReplicateInfo ReplicatedDesktopImage;
-
+	
 	/** To be assigned runtime. No attachment relation with this.
 	 * It is where the captured desktop image finally goes. */
 	UPROPERTY()
@@ -122,6 +118,10 @@ protected:
 	UPROPERTY(ReplicatedUsing = OnRep_ConnectedUserAccountInfo)
 	FWendyAccountInfo ConnectedUserAccountInfo;
 
+	/** Chat messages that older message get pushed behind. */
+	UPROPERTY(ReplicatedUsing = OnRep_ChatMessages)
+	TArray<FString> ChatMessages;
+
 	/** There's always BeginPlay timing issue for dynamically spawned object, 
 	 * trying to solve it by some naive measure. */
 	FTimerHandle DeferredBeginPlayHandlingTH;
@@ -137,6 +137,7 @@ protected:
 	 * due to other component and resouce generation process. */
 	FTimerHandle DeferredFindAndCacheHomeSeatTH;
 	FTimerHandle DeferredSetAccountInfoUITH; // Pretty much the same story here.
+	FTimerHandle CirculateChatMessagesTH;
 
 	/////////////////////////
 	// Inherited..
@@ -144,6 +145,7 @@ protected:
 	virtual void BeginPlay() override;
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 	virtual void PreReplication(IRepChangedPropertyTracker& ChangedPropertyTracker) override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	/////////////////////////
 
 	/** There's always BeginPlay timing issue for dynamically spawned object,
@@ -151,9 +153,9 @@ protected:
 	 * Put anything that you would want to be done at BeginPlay but need be deferred because of other object's dependency. 
 	 * How much it gets deferred? Just some amount.. */
 	void DeferredBeginPlayHandling();
-
+		
 	/** A character is actually ready to work in this dungeon after gone througg this. */
-	void FindAndCacheHomeSeat();
+	bool FindAndCacheHomeSeat();
 	/** Sometime the timing for FindAndCacheHomeSeat is too early so make it done later.. */
 	void DeferredFindAndCacheHomeSeat();
 
@@ -161,19 +163,15 @@ protected:
 	void SetAccountInfoUI();
 	/** Same old same old now.. */
 	void DeferredSetAccountInfoUI();
+	void SetupDeferredSetAccountInfoUITimer();
 
 	/** Main for overall captured desktop image processing, mostly about replication management */
 	void UpdateDesktopImageReplication();
 
+	void RemoveSelfFromImageRepNetwork();
+
 	/////////////////////////
 	//>> Replication & RPC..
-	UFUNCTION()
-	void OnRep_ReplicatedDesktopImage();
-	/** It actually meant to send some bunch of data from autonomous proxy of each client to the server.
-	 * The all the source desktop image cannot be retrieved from the server. */
-	UFUNCTION(Server, Reliable, WithValidation)
-	void ServerSetCaptureImage(FWendyDesktopImageReplicateInfo InReplicatedDesktopImage);
-
 	UFUNCTION()
 	void OnRep_PickedHomeSeatPosition();
 	/** It is determined from clinet (autonomous proxy) side then sent to server for replication to other clients. */
@@ -184,6 +182,11 @@ protected:
 	void OnRep_ConnectedUserAccountInfo();
 	UFUNCTION(Server, Reliable, WithValidation)
 	void ServerSetConnectedUserAccountInfo(FWendyAccountInfo InAccountInfo);
+
+	UFUNCTION()
+	void OnRep_ChatMessages();
+	UFUNCTION(Server, Reliable, WithValidation)
+	void ServerSetChatMessages(const TArray<FString>& InChatMessages);
 	//<< Replication & RPC..
 	/////////////////////////
 
@@ -199,11 +202,19 @@ protected:
 public:
 	/** Being called for the local user, when the user picked its seat from the UI. 
 	 * After this, other remotes get their seat position by replication. */
-	void SetPickedHomeSeatPosition(FVector2D InPickedPosition);
+	bool SetPickedHomeSeatPosition(FVector2D InPickedPosition);
 	
 	/** Like the story of other replicated data, this is the very first place being set for the local character
 	 * before all the replications happen. But this case is simpler. */
 	void SetConnectedUserAccountInfo(FWendyAccountInfo InAccountInfo);
+
+	void AddNewChatMessage(const FString& InNewMessage);
+	/** Circulate by time.. eventually remove old messages */
+	void CirculateChatMessages();
+	void SetChatMessagesCirculationTimer();
+
+	/** For final display */
+	void UpdateChatMessageUI();
 
 	FORCEINLINE UWendyDesktopImageComponent* GetDesktopImageComponent() const { return DesktopImageComponent; }
 

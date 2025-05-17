@@ -9,6 +9,8 @@
 #include "WendyCharacter.h"
 #include "WendyDataStore.h"
 #include "WendyGameSettings.h"
+#include "WendyGameInstance.h"
+#include "SocketSubsystem.h"
 
 APlayerController* UWdGameplayStatics::GetLocalPlayerController(const UObject* WorldContextObject)
 {
@@ -43,7 +45,14 @@ void UWdGameplayStatics::EnterWendyWorld(UObject* WorldContextObject, const FWen
 	FString LevelNameString;
 	FString OptionsString;
 
-	if (ConnectingInfo.bMyselfServer)
+	FWendyWorldConnectingInfo CheckedConnectingInfo = ConnectingInfo;	
+	if (CheckedConnectingInfo.UserId.Len() >= WD_USER_ID_MAX_LEN_PLUS_ONE)
+	{
+		CheckedConnectingInfo.UserId = GetClampedWendyUserIdString(ConnectingInfo.UserId);
+		UE_LOG(LogWendy, Warning, TEXT("User Account %s clamped to %s"), *CheckedConnectingInfo.UserId, *CheckedConnectingInfo.UserId);
+	}
+
+	if (CheckedConnectingInfo.bMyselfServer)
 	{
 		const UWendyGameSettings* WdGameSettings = GetDefault<UWendyGameSettings>(UWendyGameSettings::StaticClass());
 		if (WdGameSettings != nullptr)
@@ -54,13 +63,22 @@ void UWdGameplayStatics::EnterWendyWorld(UObject* WorldContextObject, const FWen
 	}
 	else
 	{
-		LevelNameString = ConnectingInfo.ServerIp;
+		LevelNameString = CheckedConnectingInfo.ServerIp;
 	}
 
 	FWendyDataStore& WendyDataStore = GetGlobalWendyDataStore();
-	WendyDataStore.UserAccountInfo.UserId = ConnectingInfo.UserId;
+	FWendyAccountInfo UserAccountInfo;
+	UserAccountInfo.UserId = CheckedConnectingInfo.UserId;
+	WendyDataStore.SetUserAccountInfo(UserAccountInfo);
 	
 	OpenLevel(WorldContextObject, *LevelNameString, true, OptionsString);
+
+	// Here is the place where image replication networking is getting on, instead of GameMode because GameMode doesn't exist at client side.
+	UWendyGameInstance* WendyGameInst = Cast<UWendyGameInstance>(GetGameInstance(WorldContextObject));
+	if (IsValid(WendyGameInst))
+	{
+		WendyGameInst->InitImageRepNetwork(CheckedConnectingInfo);
+	}
 }
 
 void TryClampViewForWholeInclusiveDesktopCapture(UObject* WorldContextObject)

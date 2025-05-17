@@ -99,7 +99,7 @@ protected:
 	/** Apply SourceImageData (either from local capture or replication whatsoever) to the finally used texture object. */
 	void UpdateOutputTexture();
 public:
-
+	
 	/**
 	 * To be called when the owner is locally controlled character, 
 	 * so to get image data transferred to server and other clients.

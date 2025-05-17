@@ -18,22 +18,32 @@
 #include "WendyDesktopImageComponent.h"
 #include "WendyDungeonSeat.h"
 #include "WendyUINameTag.h"
+#include "WendyImageRepPackets.h"
+#include "WendyGameInstance.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogWendyCharacter, Log, All);
 
 static TAutoConsoleVariable<int32> CVarWdDesktopImageReplicateSize(
 	TEXT("wd.DesktopImageReplicateSize"),
-	100,
-	TEXT("Sending too much data at once can be a source of unstable networking. There is actually internal limitation of unreal network."),
+	WENDY_IMAGE_PACKET_DATA_ARRAY_SIZE,
+	TEXT("It could be bigger if we upgrade rep inmage networking, until then don't go over certain limit."),
 	ECVF_ReadOnly);
+
+static TAutoConsoleVariable<int32> CVarWdDesktopImageReplicateBunchNum(
+	TEXT("wd.DesktopImageReplicateBunchNum"),
+	100,
+	TEXT("It directly related to image replication performance. Instead of increasing wd.DesktopImageReplicateSize, you increase this number."),
+	ECVF_Default);
 
 static TAutoConsoleVariable<int32> CVarWdDesktopImageRepMaxSizeForEveryTick(
 	TEXT("wd.DesktopImageRepMaxSizeForEveryTick"),
-	200,
+	20000,
 	TEXT("The maximum size that replication or RPC call can happen every tick.")
 	TEXT("If it is too big then transferring every tick can make other replication job unstable"),
 	ECVF_ReadOnly);
 
+// DesktopImageRPCInterval and DesktopImageRepInterval are old terms, when image transferring relied on unreal networking,
+// which is not anymore but the setting still works in whatever way.
 static TAutoConsoleVariable<float> CVarWdDesktopImageRPCInterval(
 	TEXT("wd.DesktopImageRPCInterval"),
 	0.01f,
@@ -45,6 +55,20 @@ static TAutoConsoleVariable<float> CVarWdDesktopImageRepInterval(
 	0.01f,
 	TEXT("The basic time interval that capture image being replicate call from server to client. ")
 	TEXT("Small (frequent) interval is fine if DesktopImageReplicateSize is small, but should give enough term if that becomes larger."),
+	ECVF_Default);
+
+static TAutoConsoleVariable<int32> CVarWdChatMessageMaxNum(
+	TEXT("wd.ChatMessageMaxNum"),
+	5,
+	TEXT("Maximum line of chat messages, to be replicated and displayed.")
+	TEXT("Increasing this number doesn't necessarly mean that whole messages get displayed because of UI."),
+	ECVF_ReadOnly);
+
+static TAutoConsoleVariable<float> CVarWdChatMessageCirculatePeriod(
+	TEXT("wd.ChatMessageCirculatePeriod"),
+	30.0f,
+	TEXT("Message line circulation time in second. This time multiplies wd.ChatMessageMaxNum will be message life span (provided there's no new message).")
+	TEXT(""),
 	ECVF_Default);
 
 /** Access these variables by these functions instead of referring variables directly. 
@@ -66,6 +90,16 @@ float GetWdDesktopImageRPCInterval()
 float GetWdDesktopImageRepInterval()
 {
 	return CVarWdDesktopImageRepInterval.GetValueOnAnyThread();
+}
+
+int32 GetWdChatMessageMaxNum()
+{
+	return CVarWdChatMessageMaxNum.GetValueOnAnyThread();
+}
+
+float GetWdChatMessageCirculatePeriod()
+{
+	return CVarWdChatMessageCirculatePeriod.GetValueOnAnyThread();
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -96,6 +130,7 @@ AWendyCharacter::AWendyCharacter(const FObjectInitializer& ObjectInitializer)
 	// Create a camera boom (pulls in towards the player if there is a collision)
 	CameraBoom = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraBoom"));
 	CameraBoom->SetupAttachment(RootComponent);
+	CameraBoom->SetRelativeLocation(FVector(50.0f, 0.0f, 0.0f)); // Let it more like first person cam if zoomed in enough.
 	CameraBoom->TargetArmLength = CameraBoomTargetArmLengthDefault; // The camera follows at this distance behind the character	
 	CameraBoom->bUsePawnControlRotation = true; // Rotate the arm based on the controller
 
@@ -112,15 +147,14 @@ AWendyCharacter::AWendyCharacter(const FObjectInitializer& ObjectInitializer)
 //=============================================================================================
 // Belows are added for Wendy
 	NameTagComp = CreateDefaultSubobject<UWidgetComponent>(TEXT("NameTagComp"));
+//	NameTagComp->SetWidgetSpace(EWidgetSpace::Screen); // I have no idea what is wrong.. it just doesn't work well in server side.
 	NameTagComp->SetupAttachment(RootComponent);
 	NameTagComp->AddRelativeLocation(FVector(0, 0, 100.0f));
 	NameTagComp->SetRelativeScale3D(FVector(0.4f, 0.4f, 0.4f));
-	NameTagComp->SetDrawSize(FVector2D(500.0f, 200.0f));
+	NameTagComp->SetDrawSize(FVector2D(1000.0f, 200.0f));
 	NameTagComp->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 
 	DesktopImageComponent = CreateDefaultSubobject<UWendyDesktopImageComponent>(TEXT("DesktopImageComponent"));
-
-	ReplicatedDesktopImage.ImageData.AddZeroed(GetWdDesktopImageReplicateElemSize());
 
 	HomeSeat = nullptr;
 	PickedHomeSeatPosition = FVector2D::ZeroVector;
@@ -243,33 +277,41 @@ void AWendyCharacter::BeginPlay()
 	Super::BeginPlay();
 
 	UWorld* OwnerWorld = GetWorld();
-	if (OwnerWorld != nullptr)
+	if (IsValid(OwnerWorld))
 	{
 		OwnerWorld->GetTimerManager().SetTimer(DeferredBeginPlayHandlingTH, this, &AWendyCharacter::DeferredBeginPlayHandling, 0.5f);
 	}
-
+	SetChatMessagesCirculationTimer();
 }
 
 void AWendyCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 
-	DOREPLIFETIME(AWendyCharacter, ReplicatedDesktopImage);
-	// Pretty much from ReplicatedMovement
-	//FDoRepLifetimeParams ReplicatedImageParams{ COND_SimulatedOrPhysics, REPNOTIFY_Always, /*bIsPushBased=*/true };
+	//DOREPLIFETIME(AWendyCharacter, ReplicatedDesktopImage);
+	//FDoRepLifetimeParams ReplicatedImageParams{ COND_None, REPNOTIFY_Always, /*bIsPushBased=*/true };
 	//DOREPLIFETIME_WITH_PARAMS(AWendyCharacter, ReplicatedDesktopImage, ReplicatedImageParams);
 
 	DOREPLIFETIME(AWendyCharacter, PickedHomeSeatPosition);
 
 	DOREPLIFETIME(AWendyCharacter, ConnectedUserAccountInfo);
+
+	DOREPLIFETIME(AWendyCharacter, ChatMessages);
 }
 
 void AWendyCharacter::PreReplication(IRepChangedPropertyTracker& ChangedPropertyTracker)
 {
 	Super::PreReplication(ChangedPropertyTracker);
 
-	// Not really much condition.. but might someday
-	//DOREPLIFETIME_ACTIVE_OVERRIDE(AWendyCharacter, ReplicatedDesktopImage, ShouldFinallyReplicateCaptauredImage());
+	// Some like this..
+	//DOREPLIFETIME_ACTIVE_OVERRIDE(AWendyCharacter, ReplicatedDesktopImage, DesktopImageReplicateCondition(0));
+}
+
+void AWendyCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	Super::EndPlay(EndPlayReason);
+
+	RemoveSelfFromImageRepNetwork();
 }
 
 void AWendyCharacter::DeferredBeginPlayHandling()
@@ -285,18 +327,20 @@ void AWendyCharacter::DeferredBeginPlayHandling()
 		// I have no idea what is wrong.. This is done at other place when WendyDungeonPlayerController possesses a pawn,
 		// but what's wrong with client?
 		FWendyDataStore& WendyDataStore = GetGlobalWendyDataStore();
-		SetConnectedUserAccountInfo(WendyDataStore.UserAccountInfo);
+		SetConnectedUserAccountInfo(WendyDataStore.GetUserAccountInfo());
 	}
 }
 
-void AWendyCharacter::FindAndCacheHomeSeat()
+bool AWendyCharacter::FindAndCacheHomeSeat()
 {
+	bool bRetVal = false;
+
 	// Should find according to the chosen index and coordinate..
 
 	// but before that..
 
 	UWorld* OwnerWorld = GetWorld();
-	if (OwnerWorld != nullptr)
+	if (IsValid(OwnerWorld))
 	{
 		UTexture2D* DesktopImageTexture = (DesktopImageComponent != nullptr) ? DesktopImageComponent->GetOutputTexture() : nullptr;
 
@@ -306,7 +350,7 @@ void AWendyCharacter::FindAndCacheHomeSeat()
 		for (FActorIterator ItActor(OwnerWorld); ItActor; ++ItActor)
 		{
 			AWendyDungeonSeat* AsWDS = Cast<AWendyDungeonSeat>(*ItActor);
-			if (AsWDS != nullptr)
+			if (IsValid(AsWDS) && AsWDS->IsOccupied() == false)
 			{
 				// Not the GetActorLocation. There's other location mark for this purpose.
 				FVector SeatOriginPos = AsWDS->GetOriginPos();
@@ -320,10 +364,12 @@ void AWendyCharacter::FindAndCacheHomeSeat()
 			}
 		}
 
-		if (FoundClosest != nullptr)
+		if (IsValid(FoundClosest))
 		{
 			HomeSeat = FoundClosest;
 			HomeSeat->SetDesktopImageTexture(DesktopImageTexture);
+			HomeSeat->SetOwnerCharacter(this);
+			bRetVal = true;
 
 			// I guess setting the location is only server job?
 			// Or perhaps for locally controlled ?
@@ -344,6 +390,7 @@ void AWendyCharacter::FindAndCacheHomeSeat()
 			}
 		}
 	}
+	return bRetVal;
 }
 
 void AWendyCharacter::DeferredFindAndCacheHomeSeat()
@@ -380,11 +427,21 @@ void AWendyCharacter::DeferredSetAccountInfoUI()
 	SetAccountInfoUI();
 }
 
+void AWendyCharacter::SetupDeferredSetAccountInfoUITimer()
+{
+	UWorld* OwnerWorld = GetWorld();
+	if (IsValid(OwnerWorld))
+	{
+		OwnerWorld->GetTimerManager().ClearTimer(DeferredSetAccountInfoUITH);
+		OwnerWorld->GetTimerManager().SetTimer(DeferredSetAccountInfoUITH, this, &AWendyCharacter::DeferredSetAccountInfoUI, 0.5f);
+	}
+}
+
 void AWendyCharacter::UpdateDesktopImageReplication()
 {
 	if (DesktopImageComponent != nullptr)
 	{
-		if (IsLocallyControlled() && ShouldFinallyReplicateCaptauredImage())
+		//if (IsLocallyControlled() && ShouldFinallyReplicateCaptauredImage())
 		{
 			double CurrRT = FPlatformTime::Seconds();
 
@@ -394,7 +451,9 @@ void AWendyCharacter::UpdateDesktopImageReplication()
 
 			// If it is locally controlled.
 			// Role could either be ROLE_Authority or ROLE_AutonomousProxy
-			if (GetLocalRole() == ROLE_Authority || GetLocalRole() == ROLE_AutonomousProxy)
+			if (GetLocalRole() == ROLE_Authority || GetLocalRole() == ROLE_AutonomousProxy 
+				|| IsLocallyControlled() //<- This condition might be redundant, but just make things sure.
+				)
 			{
 				// If false, it uses RPC
 				// Server if true, Client if false. 
@@ -404,21 +463,37 @@ void AWendyCharacter::UpdateDesktopImageReplication()
 				double& LastRepOrRPCTimeRef = bUsedReplication ? LastDesktopImageRepDirtyTime : LastDesktopImageRPCCallTime;
 				bool& bHasProcessedLastTickRef = bUsedReplication ? bDesktopImageRepDirtyLastTick : bDesktopImageRPCCallLastTick;
 
-				if ((CurrRT - LastRepOrRPCTimeRef >= RepOrRPCInterval) &&
+				if ((CurrRT - LastRepOrRPCTimeRef >= RepOrRPCInterval) && 
 					// Don't let it being transferred everyframe anyway if it is considered to be big enough
+					// but should we need this condition even thoughimage replication is driven by our own networking?
+					// perhaps think about it..
 					(GetWdDesktopImageReplicateElemSize() <= GetWdDesktopImageRepMaxSizeForEveryTick() || bHasProcessedLastTickRef == false))
 				{
-					if (bUsedReplication)
+					//if (bUsedReplication)
 					{
-						// ROLE_Authority won't have to do anymore. It will be replicated thereafter.
-						DesktopImageComponent->ExtractReplicateInfo(ReplicatedDesktopImage);
-						// But it doesn't get replicated well many times.. perhaps explict dirty marking helps? -> No
-						//MARK_PROPERTY_DIRTY_FROM_NAME(AWendyCharacter, ReplicatedDesktopImage, this);
-					}
-					else
-					{
-						DesktopImageComponent->ExtractReplicateInfo(ReplicatedDesktopImage);
-						ServerSetCaptureImage(ReplicatedDesktopImage);
+						{
+							// Now we don't do Unreal replication for image data.
+							//DesktopImageComponent->ExtractReplicateInfo(ReplicatedDesktopImage);
+
+							// ROLE_Authority won't have to do anymore. It will be replicated thereafter.
+						}
+						
+
+						// Then now we won't even use Unreal replication for this..
+						UWendyGameInstance* WdGameInst = Cast<UWendyGameInstance>(UGameplayStatics::GetGameInstance(this));
+						if (IsValid(WdGameInst) 
+							// UserAccountInfo is being set deferred, should wait until it is set.
+							&& (ConnectedUserAccountInfo.UserId.Len() > 0)
+							)
+						{
+							for (int32 RepIdx = 0; RepIdx < CVarWdDesktopImageReplicateBunchNum.GetValueOnGameThread(); ++RepIdx)
+							{
+								FWendyDesktopImageReplicateInfo LocalReplicateInfo;
+								LocalReplicateInfo.ImageData.AddZeroed(GetWdDesktopImageReplicateElemSize());
+								DesktopImageComponent->ExtractReplicateInfo(LocalReplicateInfo);
+								WdGameInst->SetSendImageInfo(ConnectedUserAccountInfo.UserId, LocalReplicateInfo);
+							}
+						}
 					}
 
 					LastRepOrRPCTimeRef = CurrRT;
@@ -430,32 +505,50 @@ void AWendyCharacter::UpdateDesktopImageReplication()
 				}
 			}
 		}
-	}
-}
-
-void AWendyCharacter::OnRep_ReplicatedDesktopImage()
-{
-	if (DesktopImageComponent != nullptr)
-	{
-		// It shouldn't be IsLocallyControlled .. Probably put check on it.
-		if (IsLocallyControlled() == false)
+		
+		if (false == IsLocallyControlled())
 		{
-			DesktopImageComponent->SetFromReplicateInfo(ReplicatedDesktopImage);
+			// Consume received image data instead of replication.
+			UWendyGameInstance* WdGameInst = Cast<UWendyGameInstance>(UGameplayStatics::GetGameInstance(this));
+			if (IsValid(WdGameInst))
+			{
+				TArray<FWendyDesktopImageReplicateInfo> ConsumedReplicateInfo;
+				WdGameInst->ConsumeImageInfo(ConnectedUserAccountInfo.UserId, ConsumedReplicateInfo);
+				for (const FWendyDesktopImageReplicateInfo& ReplicateInfo : ConsumedReplicateInfo)
+				{
+					DesktopImageComponent->SetFromReplicateInfo(ReplicateInfo);
+				}
+			}
 		}
 	}
 }
 
-void AWendyCharacter::ServerSetCaptureImage_Implementation(FWendyDesktopImageReplicateInfo InReplicatedDesktopImage)
+void AWendyCharacter::RemoveSelfFromImageRepNetwork()
 {
-	ReplicatedDesktopImage = InReplicatedDesktopImage;
+	// This is needed only for the server side and non locally controlled character
+	// Some condition will be checked and filtered inside of mark remove function.
 
-	OnRep_ReplicatedDesktopImage();
-}
-
-bool AWendyCharacter::ServerSetCaptureImage_Validate(FWendyDesktopImageReplicateInfo InReplicatedDesktopImage)
-{
-	// Not sure what should I have to do for validation.. Just putting it here.. haha
-	return true;
+	if (IsLocallyControlled() == false
+		
+		// This might make the right condition, but hey don't worry here and check it inside of GameInstance.
+		//&& (GetLocalRole() == ROLE_Authority)
+		)
+	{
+		// GetWorld might return null at the time it is being called, so try GWorld.
+		UWorld* World = GetWorld();
+		if (false == IsValid(World))
+		{
+			World = GWorld;
+		}
+		if (IsValid(World))
+		{
+			UWendyGameInstance* WdGameInst = Cast<UWendyGameInstance>(UGameplayStatics::GetGameInstance(World));
+			if (IsValid(WdGameInst))
+			{
+				WdGameInst->MarkClientRemoveServerOnly(ConnectedUserAccountInfo.UserId);
+			}
+		}
+	}
 }
 
 void AWendyCharacter::OnRep_PickedHomeSeatPosition()
@@ -495,11 +588,7 @@ void AWendyCharacter::OnRep_ConnectedUserAccountInfo()
 {
 	if (IsLocallyControlled() == false) // Locally controlled character should already handled this at the very first SetConnectedUserAccountInfo.
 	{
-		UWorld* OwnerWorld = GetWorld();
-		if (OwnerWorld != nullptr)
-		{
-			OwnerWorld->GetTimerManager().SetTimer(DeferredSetAccountInfoUITH, this, &AWendyCharacter::DeferredSetAccountInfoUI, 0.5f);
-		}
+		SetupDeferredSetAccountInfoUITimer();
 	}
 }
 
@@ -507,10 +596,28 @@ void AWendyCharacter::ServerSetConnectedUserAccountInfo_Implementation(FWendyAcc
 {
 	ConnectedUserAccountInfo = InAccountInfo;
 
-	SetAccountInfoUI();
+	// WidgetComponent might not be ready at this point, so setting up a timer instead of SetAccountInfoUI call right here.
+	SetupDeferredSetAccountInfoUITimer();
 }
 
 bool AWendyCharacter::ServerSetConnectedUserAccountInfo_Validate(FWendyAccountInfo InAccountInfo)
+{
+	return true;
+}
+
+void AWendyCharacter::OnRep_ChatMessages()
+{
+	UpdateChatMessageUI();
+}
+
+void AWendyCharacter::ServerSetChatMessages_Implementation(const TArray<FString>& InChatMessages)
+{
+	ChatMessages = InChatMessages;
+
+	UpdateChatMessageUI();
+}
+
+bool AWendyCharacter::ServerSetChatMessages_Validate(const TArray<FString>& InChatMessages)
 {
 	return true;
 }
@@ -556,7 +663,7 @@ void AWendyCharacter::ZoomCameraView(float InAmount)
 	}
 }
 
-void AWendyCharacter::SetPickedHomeSeatPosition(FVector2D InPickedPosition)
+bool AWendyCharacter::SetPickedHomeSeatPosition(FVector2D InPickedPosition)
 {
 	ensureAlwaysMsgf(IsLocallyControlled(), TEXT("What is happening that non locally controlled character pick its home position directly? for %s, role %d"),
 		*GetName(), (int32)GetLocalRole());
@@ -565,13 +672,17 @@ void AWendyCharacter::SetPickedHomeSeatPosition(FVector2D InPickedPosition)
 
 	// @TODO Wendy HomeSeat : Might better have more robust seat identification.
 	// Like all other FindAndCacheHomeSeat call, it might better be done only at the server side with more robust implementation?
-	FindAndCacheHomeSeat();
+	const bool bFoundSeat = FindAndCacheHomeSeat();
 
-	if (GetLocalRole() == ROLE_AutonomousProxy)
+	if (bFoundSeat)
 	{
-		// First for for server, then finally for all other clients.
-		ServerSetPickedHomeSeatPosition(PickedHomeSeatPosition);
+		if (GetLocalRole() == ROLE_AutonomousProxy)
+		{
+			// First for for server, then finally for all other clients.
+			ServerSetPickedHomeSeatPosition(PickedHomeSeatPosition);
+		}
 	}
+	return bFoundSeat;
 }
 
 void AWendyCharacter::SetConnectedUserAccountInfo(FWendyAccountInfo InAccountInfo)
@@ -579,15 +690,66 @@ void AWendyCharacter::SetConnectedUserAccountInfo(FWendyAccountInfo InAccountInf
 	ConnectedUserAccountInfo = InAccountInfo;
 
 	// WidgetComponent might not be ready at this point.
-	UWorld* OwnerWorld = GetWorld();
-	if (OwnerWorld != nullptr)
-	{
-		OwnerWorld->GetTimerManager().SetTimer(DeferredSetAccountInfoUITH, this, &AWendyCharacter::DeferredSetAccountInfoUI, 0.5f);
-	}
+	SetupDeferredSetAccountInfoUITimer();
 
 	if (GetLocalRole() == ROLE_AutonomousProxy)
 	{
 		// First for for server, then finally for all other clients.
 		ServerSetConnectedUserAccountInfo(ConnectedUserAccountInfo);
 	}
+}
+
+void AWendyCharacter::AddNewChatMessage(const FString& InNewMessage)
+{
+	ChatMessages.Insert(InNewMessage, 0);
+
+	const int32 MaxChatMessage = GetWdChatMessageMaxNum();
+	if (MaxChatMessage > 0 && ChatMessages.Num() > MaxChatMessage)
+	{
+		ChatMessages.RemoveAt(MaxChatMessage, ChatMessages.Num() - MaxChatMessage);
+	}
+
+	if (GetLocalRole() == ROLE_AutonomousProxy)
+	{
+		// First for for server, then finally for all other clients.
+		ServerSetChatMessages(ChatMessages);
+	}
+
+	// Message has been added in whatever reason, so it has to be counted again.
+	SetChatMessagesCirculationTimer();
+
+	UpdateChatMessageUI();
+}
+
+void AWendyCharacter::CirculateChatMessages()
+{
+	// New message goes to the front, so pusing new empty message should do the same.
+	AddNewChatMessage(FString(TEXT("")));
+}
+
+void AWendyCharacter::SetChatMessagesCirculationTimer()
+{
+	// Other than local controlled character, chat message will be replicated, even on circulation.
+	if (IsLocallyControlled())
+	{
+		UWorld* OwnerWorld = GetWorld();
+		if (IsValid(OwnerWorld))
+		{
+			OwnerWorld->GetTimerManager().ClearTimer(CirculateChatMessagesTH);
+			OwnerWorld->GetTimerManager().SetTimer(CirculateChatMessagesTH, this, &AWendyCharacter::CirculateChatMessages, GetWdChatMessageCirculatePeriod());
+		}
+	}
+}
+
+void AWendyCharacter::UpdateChatMessageUI()
+{
+	if (IsValid(NameTagComp))
+	{
+		UWendyUINameTag* InternalWidget = Cast<UWendyUINameTag>(NameTagComp->GetWidget());
+		if (IsValid(InternalWidget))
+		{
+			InternalWidget->SetChatMessage(ChatMessages);
+		}
+	}
+
 }

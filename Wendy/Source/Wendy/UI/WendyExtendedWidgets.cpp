@@ -6,8 +6,8 @@
 UWdTextBlock::UWdTextBlock(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 {
-	// Much reaon for text blocks should block the input? It could be but guess not that much..
-	Visibility = ESlateVisibility::HitTestInvisible;
+	// Much reason for text blocks should block the input? It could be but guess not that much..
+	SetVisibility(ESlateVisibility::HitTestInvisible);
 }
 
 //==================================================

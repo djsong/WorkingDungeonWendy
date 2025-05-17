@@ -13,6 +13,7 @@
 #include "WendyDungeonPlayerController.h"
 #include "WendyDungeonSeat.h"
 #include "WendyExtendedWidgets.h"
+#include "Misc/MessageDialog.h"
 
 /** Not so neat, but let's simply define it in hard way.. Better be scaled according to the whole number. */
 const FVector2D GDungeonSeatSelectionUIElemRelSize(0.04f, 0.04f);
@@ -31,6 +32,13 @@ void UWendyUIDungeonSeatSelection::NativeOnInitialized()
 	Super::NativeOnInitialized();
 
 	GenerateSeatSelectionUIs();
+}
+
+void UWendyUIDungeonSeatSelection::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
+{
+	Super::NativeTick(MyGeometry, InDeltaTime);
+
+	UpdateSeatOccupiedState();
 }
 
 void UWendyUIDungeonSeatSelection::StaticWidgetPreparations()
@@ -125,15 +133,23 @@ void UWendyUIDungeonSeatSelection::GenerateSeatSelectionUIs()
 				{
 					CheckBoxPlacedSlot->SetPosition(FVector2D::ZeroVector);
 					CheckBoxPlacedSlot->SetSize(SingleSeatElemSize);
-
+				}
+				// This occupied check better be done periodically.
+				if (AsWDS->IsOccupied())
+				{
+					NewElem.SelectedStateCB->SetIsEnabled(false);
 				}
 				// It actually need to set image size of style..
-				NewElem.SelectedStateCB->WidgetStyle.UncheckedImage.SetImageSize(SingleSeatElemSize);
-				NewElem.SelectedStateCB->WidgetStyle.UncheckedHoveredImage.SetImageSize(SingleSeatElemSize);
-				NewElem.SelectedStateCB->WidgetStyle.UncheckedPressedImage.SetImageSize(SingleSeatElemSize);
-				NewElem.SelectedStateCB->WidgetStyle.CheckedImage.SetImageSize(SingleSeatElemSize);
-				NewElem.SelectedStateCB->WidgetStyle.CheckedHoveredImage.SetImageSize(SingleSeatElemSize);
-				NewElem.SelectedStateCB->WidgetStyle.CheckedPressedImage.SetImageSize(SingleSeatElemSize);
+				FCheckBoxStyle NewCheckBoxStyle = NewElem.SelectedStateCB->GetWidgetStyle();
+				{
+					NewCheckBoxStyle.UncheckedImage.SetImageSize(SingleSeatElemSize);
+					NewCheckBoxStyle.UncheckedHoveredImage.SetImageSize(SingleSeatElemSize);
+					NewCheckBoxStyle.UncheckedPressedImage.SetImageSize(SingleSeatElemSize);
+					NewCheckBoxStyle.CheckedImage.SetImageSize(SingleSeatElemSize);
+					NewCheckBoxStyle.CheckedHoveredImage.SetImageSize(SingleSeatElemSize);
+					NewCheckBoxStyle.CheckedPressedImage.SetImageSize(SingleSeatElemSize);
+				}
+				NewElem.SelectedStateCB->SetWidgetStyle(NewCheckBoxStyle);
 
 				NewElem.SelectedStateCB->OnCheckStateChanged.AddDynamic(this, &UWendyUIDungeonSeatSelection::OnAnySelectionCheckStateChanged);
 
@@ -282,18 +298,25 @@ void UWendyUIDungeonSeatSelection::OnGoToSeatClick()
 			// which is hilarious because DungeonSeat will be searched again based on the information sent here.
 			// I know that it is stupid, but there is something that I should learn. It can become better.
 			const FVector PickedOrgPos = PickedDungeonSeat->GetOriginPos();
-			LocalChar->SetPickedHomeSeatPosition(FVector2D(PickedOrgPos.X, PickedOrgPos.Y));
-
-			// Can we expect some case that game state is other than Wendy dungeon while ther is a local wendy character?
-			// In some way, this UI might be at other gamemode like Lobby, but in such case picked information should be cached in other way.
-			AWendyDungeonGameState* DungeonGS = Cast<AWendyDungeonGameState>(UWdGameplayStatics::GetGameState(this));
-			if (DungeonGS != nullptr)
+			if (LocalChar->SetPickedHomeSeatPosition(FVector2D(PickedOrgPos.X, PickedOrgPos.Y)))
 			{
-				checkf(DungeonGS->GetCurrentPhase() == EWendyDungeonPhase::WDP_SeatSelection,
-					TEXT("DungeonSeatSelection should exists only in SeatSelection phase, but now %d. What is wrong?"), (int32)DungeonGS->GetCurrentPhase());
+				// Can we expect some case that game state is other than Wendy dungeon while ther is a local wendy character?
+				// In some way, this UI might be at other gamemode like Lobby, but in such case picked information should be cached in other way.
+				AWendyDungeonGameState* DungeonGS = Cast<AWendyDungeonGameState>(UWdGameplayStatics::GetGameState(this));
+				if (DungeonGS != nullptr)
+				{
+					checkf(DungeonGS->GetCurrentPhase() == EWendyDungeonPhase::WDP_SeatSelection,
+						TEXT("DungeonSeatSelection should exists only in SeatSelection phase, but now %d. What is wrong?"), (int32)DungeonGS->GetCurrentPhase());
 
-				// Advance then this UI will be destroyed..
-				DungeonGS->AdvancePhase();
+					// Advance then this UI will be destroyed..
+					DungeonGS->AdvancePhase();
+				}
+			}
+			else
+			{
+				FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(FString::Printf(
+					TEXT("Please choose another seat.")
+				)));
 			}
 		}
 	}
@@ -305,6 +328,23 @@ void UWendyUIDungeonSeatSelection::OnAnySelectionCheckStateChanged(bool bChecked
 	// If it cannot be prevented, simply don't let it proceeed in such case.
 
 	UpdateGoToSeatBTNEnableState();
+}
+
+void UWendyUIDungeonSeatSelection::UpdateSeatOccupiedState()
+{
+	for (FWdSingleDgSeatSelectionUIElem& UIElem : SelectionUIElems)
+	{
+		if (IsValid(UIElem.SelectedStateCB) && 
+			UIElem.AssociatedSeat.IsValid() &&
+			UIElem.AssociatedSeat->IsOccupied())
+		{
+			UIElem.SelectedStateCB->SetIsEnabled(false);
+			UIElem.SelectedStateCB->SetCheckedState(ECheckBoxState::Unchecked); // Might be checked seat, so better clear.
+
+			// If unoccupied then UIElem.SelectedStateCB->SetIsEnabled(true) for leaving character?  
+
+		}
+	}
 }
 
 float UWendyUIDungeonSeatSelection::GetCurrViewDPIScale(UObject* WorldContextObject)
