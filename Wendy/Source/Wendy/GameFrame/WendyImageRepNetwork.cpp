@@ -197,7 +197,7 @@ void FWendyImageRepNetwork::UpdateTickServer(float InDeltaSecond)
 					}
 				}
 
-				if (ClientInfo.RecvBufferPointer <= 0)
+				if (ClientInfo.RecvBufferPointer == 0)
 				{ // No more to serialze.
 					break;
 				}
@@ -255,13 +255,25 @@ void FWendyImageRepNetwork::UpdateTickServer(float InDeltaSecond)
 
 						if (ImagePacket.SerializeToSendBuffer(ClientInfo.SendBuffer, ClientInfo.SendBufferPointer))
 						{
-							if (RawSendAction(ClientInfo.SocketPtr, *ClientInfo.BoundAddr.Get(), ClientInfo.SendBuffer, ClientInfo.SendBufferPointer))
+							int32 SendTryLimit = 100;
+							while (SendTryLimit-- > 0)
 							{
-								
-							}
-							else
-							{
-								// Well we gonna try next chance.
+								if (RawSendAction(ClientInfo.SocketPtr, *ClientInfo.BoundAddr.Get(), ClientInfo.SendBuffer, ClientInfo.SendBufferPointer))
+								{
+								}
+								else
+								{
+									// Well we gonna try next chance, but in this case we might give some slack..
+									if ((SendTryLimit % 10) == 0)
+									{
+										FPlatformProcess::Sleep(0.001f);
+									}
+								}
+
+								if (ClientInfo.SendBufferPointer == 0)
+								{
+									break;
+								}
 							}
 						}
 						else
@@ -359,13 +371,24 @@ void FWendyImageRepNetwork::UpdateTickClient(float InDeltaSecond)
 
 				if (ImagePacket.SerializeToSendBuffer(ConnectionBase.SendBuffer, ConnectionBase.SendBufferPointer))
 				{
-					if (RawSendAction(ConnectionBase.SocketPtr, *ConnectionBase.BoundAddr.Get(), ConnectionBase.SendBuffer, ConnectionBase.SendBufferPointer))
+					int32 SendTryLimit = 100;
+					while (SendTryLimit-- > 0)
 					{
-
-					}
-					else
-					{
-						// Well we gonna try next chance.
+						if (RawSendAction(ConnectionBase.SocketPtr, *ConnectionBase.BoundAddr.Get(), ConnectionBase.SendBuffer, ConnectionBase.SendBufferPointer))
+						{
+						}
+						else
+						{
+							// Well we gonna try next chance, but in this case we might give some slack..
+							if ((SendTryLimit % 10) == 0)
+							{
+								FPlatformProcess::Sleep(0.001f);
+							}
+						}
+						if (ConnectionBase.SendBufferPointer == 0)
+						{
+							break;
+						}
 					}
 				}
 				else
@@ -448,6 +471,11 @@ bool FWendyImageRepNetwork::RawSendAction(FSocket* InSocket, FInternetAddr& InAd
 		if (ActualBytesSent > 0)
 		{
 			SendBufferPointer = FMath::Max<uint32>(SendBufferPointer - static_cast<uint32>(ActualBytesSent), 0);
+
+			/*if (SendBufferPointer > 0)
+			{
+				UE_LOG(LogWendy, Warning, TEXT("Network Checking #3, Much left for send %u"), SendBufferPointer);
+			}*/
 
 			for (int32 SendBfIdx = 0; SendBfIdx < static_cast<int32>(SendBufferPointer); ++SendBfIdx)
 			{

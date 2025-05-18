@@ -22,12 +22,22 @@ bool FWendyImageRepPacketBase::SerializeFromRecvBuffer(uint8* InOutRecvBuffer, u
 		FMemory::Memcpy(this, InOutRecvBuffer, PacketSizeBytes);
 
 		InOutRecvBufferPointer -= PacketSizeBytes;
+
+		/*if (InOutRecvBufferPointer > 0)
+		{
+			UE_LOG(LogWendy, Warning, TEXT("Network Checking #1, Accumulated recv %u"), InOutRecvBufferPointer);
+		}*/
+
 		for (int32 RecvBfIdx = 0; RecvBfIdx < static_cast<int32>(InOutRecvBufferPointer); ++RecvBfIdx)
 		{
 			InOutRecvBuffer[RecvBfIdx] = InOutRecvBuffer[RecvBfIdx + PacketSizeBytes];
 		}
 		return true;
 	}
+	/*else
+	{
+		UE_LOG(LogWendy, Warning, TEXT("Network Checking #2, haven't recv enough %u"), InOutRecvBufferPointer);
+	}*/
 
 	return false;
 }
