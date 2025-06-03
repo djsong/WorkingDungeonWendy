@@ -59,12 +59,10 @@ void AWendyDungeonGameState::GoToSeatSelection()
 	CreateSeatSelectionUI();
 
 	// For seat selection, need to concentrate on UI.
-	APlayerController* LocalPC = UWdGameplayStatics::GetLocalPlayerController(this);
-	if (LocalPC != nullptr)
+	AWendyDungeonPlayerController* LocalWdPC = Cast<AWendyDungeonPlayerController>(UWdGameplayStatics::GetLocalPlayerController(this));
+	if (IsValid(LocalWdPC))
 	{
-		// Isn't it replicated..?
-		LocalPC->SetInputMode(FInputModeUIOnly());
-		LocalPC->SetShowMouseCursor(true);
+		LocalWdPC->SetInputModeUIFocusing(false);
 	}
 }
 
@@ -94,11 +92,10 @@ void AWendyDungeonGameState::AdvancePhase()
 		CurrentPhase = EWendyDungeonPhase::WDP_Working;
 
 		// Input mode for the main working phase. Now going to 3D world, but guess need UI too.
-		APlayerController* LocalPC = UWdGameplayStatics::GetLocalPlayerController(this);
-		if (LocalPC != nullptr)
+		AWendyDungeonPlayerController* LocalWdPC = Cast<AWendyDungeonPlayerController>(UWdGameplayStatics::GetLocalPlayerController(this));
+		if (IsValid(LocalWdPC))
 		{
-			LocalPC->SetInputMode(FInputModeGameAndUI());
-			LocalPC->SetShowMouseCursor(false);
+			LocalWdPC->SetInputModeExploring();
 		}
 
 		// If there's any UI for the next phase..

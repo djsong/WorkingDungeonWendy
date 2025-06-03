@@ -127,9 +127,6 @@ protected:
 	FTimerHandle DeferredBeginPlayHandlingTH;
 
 	/** To control the interval that the captured data goes to server. It cannot be every time if single sending bunch is big.. */
-	double LastDesktopImageRPCCallTime;
-	bool bDesktopImageRPCCallLastTick; // At least not every tick
-	/** Pretty much like LastDesktopImageRPCCallTime.. could it be a bit different? */
 	double LastDesktopImageRepDirtyTime;
 	bool bDesktopImageRepDirtyLastTick; // At least not every tick
 
@@ -217,6 +214,7 @@ public:
 	void UpdateChatMessageUI();
 
 	FORCEINLINE UWendyDesktopImageComponent* GetDesktopImageComponent() const { return DesktopImageComponent; }
+	FORCEINLINE FString GetUserId() const { return ConnectedUserAccountInfo.UserId; }
 
 	/** To enable going back at any case? */
 	const static float CameraBoomTargetArmLengthDefault;

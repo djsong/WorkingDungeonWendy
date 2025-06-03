@@ -104,8 +104,8 @@ void TryClampViewForWholeInclusiveDesktopCapture(UObject* WorldContextObject)
 	if (ViewSizeX > 0 && ViewSizeY > 0 && 
 		DisplayMetrics.PrimaryDisplayWidth > 1 && DisplayMetrics.PrimaryDisplayHeight > 1)
 	{
-		int32 DesiredViewSizeX = FMath::Min(ViewSizeX, DisplayMetrics.PrimaryDisplayWidth / 2);
-		int32 DesiredViewSizeY = FMath::Min(ViewSizeY, DisplayMetrics.PrimaryDisplayHeight / 2);
+		int32 DesiredViewSizeX = FMath::Min(ViewSizeX, FMath::RoundToInt(static_cast<float>(DisplayMetrics.PrimaryDisplayWidth) / 1.5f));
+		int32 DesiredViewSizeY = FMath::Min(ViewSizeY, FMath::RoundToInt(static_cast<float>(DisplayMetrics.PrimaryDisplayHeight) / 1.5f));
 		if (DesiredViewSizeX != ViewSizeX || DesiredViewSizeY != ViewSizeY)
 		{
 			// It must be windowed to see some other desktop area.

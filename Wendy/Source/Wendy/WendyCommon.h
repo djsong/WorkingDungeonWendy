@@ -107,3 +107,117 @@ struct FWendyAccountInfo
 	UPROPERTY(Transient)
 	FString UserId; // Id? Nickname? Whatever..
 };
+
+enum class EWendyRemoteInputKeys : uint8
+{
+	None,
+
+	MLB,
+	MRB,
+
+	Key_BackSpace,
+	Key_Tab,
+	Key_Enter,
+	Key_Escape,
+	Key_SpaceBar,
+	Key_PageUp,
+	Key_PageDown,
+	Key_Left,
+	Key_Up,
+	Key_Right,
+	Key_Down,
+	Key_Delete,
+
+	Key_Zero,
+	Key_One,
+	Key_Two,
+	Key_Three,
+	Key_Four,
+	Key_Five,
+	Key_Six,
+	Key_Seven,
+	Key_Eight,
+	Key_Nine,
+
+	Key_F1,
+	Key_F2,
+	Key_F3,
+	Key_F4,
+	Key_F5,
+	Key_F6,
+	Key_F7,
+	Key_F8,
+	Key_F9,
+	Key_F10,
+	Key_F11,
+	Key_F12,
+
+	Key_A,
+	Key_B,
+	Key_C,
+	Key_D,
+	Key_E,
+	Key_F,
+	Key_G,
+	Key_H,
+	Key_I,
+	Key_J,
+	Key_K,
+	Key_L,
+	Key_M,
+	Key_N,
+	Key_O,
+	Key_P,
+	Key_Q,
+	Key_R,
+	Key_S,
+	Key_T,
+	Key_U,
+	Key_V,
+	Key_W,
+	Key_X,
+	Key_Y,
+	Key_Z,
+
+	/*
+	 !!!!!!!!!!  
+
+	 You must modify its conversion util (FromFKeyToWendyRemoteKey, FromWendyRemoteKeyToWinVK)
+	 for new entry.	
+	
+	!!!!!!!!!!
+	*/
+
+	End
+};
+EWendyRemoteInputKeys FromFKeyToWendyRemoteKey(const FKey InFKey);
+uint8 FromWendyRemoteKeyToWinVK(EWendyRemoteInputKeys InRemoteInputKey);
+
+enum class EWendyRemoteInputEvents : uint8
+{
+	None,
+
+	Pressed,
+	Released,
+
+	End
+};
+
+/** For monitor input tracking and faking. */
+struct FWendyMonitorHitAndInputInfo
+{
+	FString TargetUserId; // The owner of the picked monitor, not the current user.
+	FVector2D MonitorHitUV = FVector2D(-1.0f, -1.0f);
+	EWendyRemoteInputKeys InputKey = EWendyRemoteInputKeys::None;
+	EWendyRemoteInputEvents InputEvent = EWendyRemoteInputEvents::None;
+
+	FORCEINLINE bool HasValidInfo() const {
+		return TargetUserId.Len() > 0 &&
+			MonitorHitUV.X >= 0.0f && MonitorHitUV.X <= 1.0f &&
+			MonitorHitUV.Y >= 0.0f && MonitorHitUV.Y <= 1.0f;
+	}
+	FORCEINLINE void SetInvalid()
+	{
+		MonitorHitUV.X = MonitorHitUV.Y = -1.0f;
+	}
+};

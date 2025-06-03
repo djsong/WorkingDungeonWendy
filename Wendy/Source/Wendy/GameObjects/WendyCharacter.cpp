@@ -31,30 +31,16 @@ static TAutoConsoleVariable<int32> CVarWdDesktopImageReplicateSize(
 
 static TAutoConsoleVariable<int32> CVarWdDesktopImageReplicateBunchNum(
 	TEXT("wd.DesktopImageReplicateBunchNum"),
-	100,
+	1000,
 	TEXT("It directly related to image replication performance. Instead of increasing wd.DesktopImageReplicateSize, you increase this number."),
 	ECVF_Default);
 
-static TAutoConsoleVariable<int32> CVarWdDesktopImageRepMaxSizeForEveryTick(
-	TEXT("wd.DesktopImageRepMaxSizeForEveryTick"),
-	20000,
-	TEXT("The maximum size that replication or RPC call can happen every tick.")
-	TEXT("If it is too big then transferring every tick can make other replication job unstable"),
-	ECVF_ReadOnly);
-
 // DesktopImageRPCInterval and DesktopImageRepInterval are old terms, when image transferring relied on unreal networking,
 // which is not anymore but the setting still works in whatever way.
-static TAutoConsoleVariable<float> CVarWdDesktopImageRPCInterval(
-	TEXT("wd.DesktopImageRPCInterval"),
+static TAutoConsoleVariable<float> CVarWdDesktopImageRepExtractInterval(
+	TEXT("wd.DesktopImageRepExtractInterval"),
 	0.01f,
-	TEXT("The basic time interval that capture image sending RPC call from clinet to server.")
-	TEXT("Small (frequent) interval is fine if DesktopImageReplicateSize is small, but should give enough term if that becomes larger."),
-	ECVF_Default);
-static TAutoConsoleVariable<float> CVarWdDesktopImageRepInterval(
-	TEXT("wd.DesktopImageRepInterval"),
-	0.01f,
-	TEXT("The basic time interval that capture image being replicate call from server to client. ")
-	TEXT("Small (frequent) interval is fine if DesktopImageReplicateSize is small, but should give enough term if that becomes larger."),
+	TEXT("The basic time interval that extract image data for network replication."),
 	ECVF_Default);
 
 static TAutoConsoleVariable<int32> CVarWdChatMessageMaxNum(
@@ -77,19 +63,10 @@ int32 GetWdDesktopImageReplicateElemSize()
 {
 	return CVarWdDesktopImageReplicateSize.GetValueOnAnyThread();
 }
-int32 GetWdDesktopImageRepMaxSizeForEveryTick()
-{
-	return CVarWdDesktopImageRepMaxSizeForEveryTick.GetValueOnAnyThread();
-}
 
-float GetWdDesktopImageRPCInterval()
+float GetWdDesktopImageRepExtractInterval()
 {
-	return CVarWdDesktopImageRPCInterval.GetValueOnAnyThread();
-}
-
-float GetWdDesktopImageRepInterval()
-{
-	return CVarWdDesktopImageRepInterval.GetValueOnAnyThread();
+	return CVarWdDesktopImageRepExtractInterval.GetValueOnAnyThread();
 }
 
 int32 GetWdChatMessageMaxNum()
@@ -159,8 +136,6 @@ AWendyCharacter::AWendyCharacter(const FObjectInitializer& ObjectInitializer)
 	HomeSeat = nullptr;
 	PickedHomeSeatPosition = FVector2D::ZeroVector;
 
-	LastDesktopImageRPCCallTime = 0.0;
-	bDesktopImageRPCCallLastTick = false;
 	LastDesktopImageRepDirtyTime = 0.0;
 	bDesktopImageRepDirtyLastTick = false;
 //=============================================================================================
@@ -312,6 +287,13 @@ void AWendyCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	Super::EndPlay(EndPlayReason);
 
 	RemoveSelfFromImageRepNetwork();
+
+	if (IsValid(HomeSeat))
+	{
+		HomeSeat->SetOwnerCharacter(this);
+		HomeSeat->FallbackToOffState();
+		HomeSeat = nullptr;
+	}
 }
 
 void AWendyCharacter::DeferredBeginPlayHandling()
@@ -455,53 +437,28 @@ void AWendyCharacter::UpdateDesktopImageReplication()
 				|| IsLocallyControlled() //<- This condition might be redundant, but just make things sure.
 				)
 			{
-				// If false, it uses RPC
-				// Server if true, Client if false. 
-				const bool bUsedReplication= (GetLocalRole() == ROLE_Authority);
+				// If false, it uses RPC. Server if true, Client if false. 
+				//const bool bUsedReplication= (GetLocalRole() == ROLE_Authority);
 
-				const float RepOrRPCInterval = bUsedReplication ? GetWdDesktopImageRepInterval() : GetWdDesktopImageRPCInterval();
-				double& LastRepOrRPCTimeRef = bUsedReplication ? LastDesktopImageRepDirtyTime : LastDesktopImageRPCCallTime;
-				bool& bHasProcessedLastTickRef = bUsedReplication ? bDesktopImageRepDirtyLastTick : bDesktopImageRPCCallLastTick;
-
-				if ((CurrRT - LastRepOrRPCTimeRef >= RepOrRPCInterval) && 
-					// Don't let it being transferred everyframe anyway if it is considered to be big enough
-					// but should we need this condition even thoughimage replication is driven by our own networking?
-					// perhaps think about it..
-					(GetWdDesktopImageReplicateElemSize() <= GetWdDesktopImageRepMaxSizeForEveryTick() || bHasProcessedLastTickRef == false))
+				if ((CurrRT - LastDesktopImageRepDirtyTime >= GetWdDesktopImageRepExtractInterval()))
 				{
-					//if (bUsedReplication)
+					// Now we won't even use Unreal replication for this..
+					UWendyGameInstance* WdGameInst = Cast<UWendyGameInstance>(UGameplayStatics::GetGameInstance(this));
+					if (IsValid(WdGameInst) 
+						// UserAccountInfo is being set deferred, should wait until it is set.
+						&& (ConnectedUserAccountInfo.UserId.Len() > 0)
+						)
 					{
+						for (int32 RepIdx = 0; RepIdx < CVarWdDesktopImageReplicateBunchNum.GetValueOnGameThread(); ++RepIdx)
 						{
-							// Now we don't do Unreal replication for image data.
-							//DesktopImageComponent->ExtractReplicateInfo(ReplicatedDesktopImage);
-
-							// ROLE_Authority won't have to do anymore. It will be replicated thereafter.
-						}
-						
-
-						// Then now we won't even use Unreal replication for this..
-						UWendyGameInstance* WdGameInst = Cast<UWendyGameInstance>(UGameplayStatics::GetGameInstance(this));
-						if (IsValid(WdGameInst) 
-							// UserAccountInfo is being set deferred, should wait until it is set.
-							&& (ConnectedUserAccountInfo.UserId.Len() > 0)
-							)
-						{
-							for (int32 RepIdx = 0; RepIdx < CVarWdDesktopImageReplicateBunchNum.GetValueOnGameThread(); ++RepIdx)
-							{
-								FWendyDesktopImageReplicateInfo LocalReplicateInfo;
-								LocalReplicateInfo.ImageData.AddZeroed(GetWdDesktopImageReplicateElemSize());
-								DesktopImageComponent->ExtractReplicateInfo(LocalReplicateInfo);
-								WdGameInst->SetSendImageInfo(ConnectedUserAccountInfo.UserId, LocalReplicateInfo);
-							}
+							FWendyDesktopImageReplicateInfo LocalReplicateInfo;
+							LocalReplicateInfo.ImageData.AddZeroed(GetWdDesktopImageReplicateElemSize());
+							DesktopImageComponent->ExtractReplicateInfo(LocalReplicateInfo);
+							WdGameInst->SetSendImageInfo(ConnectedUserAccountInfo.UserId, LocalReplicateInfo);
 						}
 					}
 
-					LastRepOrRPCTimeRef = CurrRT;
-					bHasProcessedLastTickRef = true;
-				}
-				else
-				{
-					bHasProcessedLastTickRef = false;
+					LastDesktopImageRepDirtyTime = CurrRT;
 				}
 			}
 		}

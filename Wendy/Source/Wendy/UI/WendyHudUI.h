@@ -19,15 +19,27 @@ class UWendyHudUI : public UWendyUiWidget
 protected:
 
 	UPROPERTY(Transient, meta = (BindWidget))
-	UEditableTextBox* ET_ChatMessage;
+	UEditableTextBox* ET_ChatMessage = nullptr;
+
+	UPROPERTY(Transient, meta = (BindWidget))
+	UWdButton* BTN_BackToExploring = nullptr;
 
 public:
 	UWendyHudUI(const FObjectInitializer& ObjectInitializer);
 
+	virtual void NativeConstruct() override;
 	virtual void NativeDestruct() override;
 	virtual void StaticWidgetPreparations() override;
 
 	UFUNCTION()
 	void OnChatMessageCommitted(const FText& InText, ETextCommit::Type InCommitMethod);
+	UFUNCTION()
+	void OnBackToExploringButtonClicked();
+
+	/** Not the event from this UI, from outside object. */
+	UFUNCTION()
+	void OnWdPcExploringInputModeEvent();
+	UFUNCTION()
+	void OnWdPcUIFocusingInputModeEvent();
 };
 

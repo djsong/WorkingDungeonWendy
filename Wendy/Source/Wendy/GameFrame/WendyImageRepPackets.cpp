@@ -111,3 +111,25 @@ void FWendyImageRepPacket_ImageData::ToReplicateInfo(FString& OutImageOwnerId, F
 	const SIZE_T CopySize = ImageReplicateInfo.UpdateElemNum * sizeof(FWendyReplicatedColor);
 	FMemory::Memcpy(ImageReplicateInfo.ImageData.GetData(), this->ImageData, CopySize);
 }
+
+uint32 FWendyImageRepPacket_RemoteInput::CalculatePacketSizeBytes() const
+{
+	const uint32 RetVal = static_cast<uint32>(sizeof(FWendyImageRepPacket_RemoteInput));
+	return RetVal;
+}
+
+void FWendyImageRepPacket_RemoteInput::FromHitAndInputInfo(const FWendyMonitorHitAndInputInfo& InInfo)
+{
+	ensureMsgf(InInfo.TargetUserId.Len() < WD_USER_ID_MAX_LEN_PLUS_ONE, TEXT("This Id (%s) cannot be fully sent through network"), *InInfo.TargetUserId);
+	FMemory::Memcpy(this->TargetUserId, InInfo.TargetUserId.GetCharArray().GetData(), WD_USER_ID_MAX_LEN_PLUS_ONE * sizeof(TCHAR));
+	this->MonitorHitUV = InInfo.MonitorHitUV;
+	this->InputKey = InInfo.InputKey;
+	this->InputEvent = InInfo.InputEvent;
+}
+void FWendyImageRepPacket_RemoteInput::ToHitAndInputInfo(FWendyMonitorHitAndInputInfo& OutInfo)
+{
+	OutInfo.TargetUserId = FString(this->TargetUserId);
+	OutInfo.MonitorHitUV = this->MonitorHitUV;
+	OutInfo.InputKey = this->InputKey;
+	OutInfo.InputEvent = this->InputEvent;
+}

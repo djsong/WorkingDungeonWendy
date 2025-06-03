@@ -23,6 +23,7 @@
 
 DECLARE_CYCLE_STAT(TEXT("UpdateDesktopCapture"), STAT_UpdateLocalDesktopCaptureStaging, STATGROUP_WendyGame);
 DECLARE_CYCLE_STAT(TEXT("UpdateOuputTexture"), STAT_UpdateOuputTexture, STATGROUP_WendyGame);
+DECLARE_CYCLE_STAT(TEXT("ExtractReplicateInfo"), STAT_ExtractReplicateInfo, STATGROUP_WendyGame);
 
 FIntPoint GetWendyDesktopImageSize()
 {
@@ -51,19 +52,19 @@ static TAutoConsoleVariable<float> CVarWdOutputTextureUpdatePeriod(
 	ECVF_Scalability);
 static TAutoConsoleVariable<float> CVarWdOutputTextureUpdatePeriod_RandFrac(
 	TEXT("wd.OutputTextureUpdatePeriod_RandFrac"),
-	0.2f,
+	0.0f,
 	TEXT("A bit of random is applied every update period. This is the fraction of original OutputTextureUpdatePeriod setting."),
 	ECVF_Default);
 
 static TAutoConsoleVariable<float> CVarWdDesktopCaptureBasePeriod(
 	TEXT("wd.DesktopCaptureBasePeriod"),
-	1.0f,
+	0.4f,
 	TEXT("A base interval to capture the desktop image, the first and fundamental step to acqure desktop image.")
 	TEXT("Having this interval variable means that image capturing is not incremental."),
 	ECVF_Default);
 static TAutoConsoleVariable<float> CVarWdDesktopCaptureBasePeriod_RandFrac(
 	TEXT("wd.DesktopCaptureBasePeriod_RandFrac"),
-	0.2f,
+	0.0f,
 	TEXT("A bit of random is applied every capture period. This is the fraction of original DesktopCaptureBasePeriod setting."),
 	ECVF_Default);
 
@@ -468,10 +469,11 @@ void UWendyDesktopImageComponent::UpdateOutputTexture()
 
 void UWendyDesktopImageComponent::ExtractReplicateInfo(FWendyDesktopImageReplicateInfo& OutReplicateInfo)
 {
+	SCOPE_CYCLE_COUNTER(STAT_ExtractReplicateInfo);
+
 	// It is assume that this function is called per replication interval,
 	// but how often repliation being handled? like once in a tick?
-
-
+	
 	// Is checking bDirtyForReplication necessary? and even proper when the staging size is not ensured to be the same as replicating size?
 	// if (bDirtyForReplication) 
 	{

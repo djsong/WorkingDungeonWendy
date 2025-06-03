@@ -72,3 +72,19 @@ void UWendyGameInstance::MarkClientRemoveServerOnly(const FString& InClientId)
 		}
 	}
 }
+
+void UWendyGameInstance::SetRemoteInputInfo(const FWendyMonitorHitAndInputInfo& InInfo)
+{
+	if (ImageRepNetworkThreadWorker.IsValid())
+	{
+		ImageRepNetworkThreadWorker->SetRemoteInputInfo(InInfo);
+	}
+}
+
+void UWendyGameInstance::ConsumeRemoteInputInfo(TArray<FWendyMonitorHitAndInputInfo>& OutInfo)
+{
+	if (ImageRepNetworkThreadWorker.IsValid())
+	{
+		ImageRepNetworkThreadWorker->ConsumeRemoteInputInfo(OutInfo);
+	}
+}

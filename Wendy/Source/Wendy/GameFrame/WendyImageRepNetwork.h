@@ -6,6 +6,7 @@
 #include "HAL/Runnable.h"
 #include "HAL/RunnableThread.h"
 #include "WendyCommon.h"
+#include "WendyImageRepPackets.h"
 
 class FSocket; 
 
@@ -50,6 +51,7 @@ class FWendyImageRepNetwork
 	FCriticalSection ClientInfoAccessMutex;
 	FCriticalSection ImageDataAccessMutex;
 	FCriticalSection ClientRemoveMutex;
+	FCriticalSection RemoteInoputInfoMutex;
 	
 	/** An element per each SetSendImageInfo call, then removed on socket send. 
 	 * Accessed from both game and this network thread. 
@@ -62,6 +64,13 @@ class FWendyImageRepNetwork
 	
 	/** If any Send/RecvStagingReplicateInfo bound to an account becomes larger than this value, it will be abandoned. */
 	const int32 STAGING_DATA_SIZE_REGARDED_TOO_MUCH = 100000;
+
+	TArray<FWendyMonitorHitAndInputInfo> SendStagingRemoteInoputInfo;
+	TArray<FWendyMonitorHitAndInputInfo> RecvStagingRemoteInoputInfo;
+	/** To control the frequency of sending mouse cursor movement. */
+	double LastTimeRemoteInputStagingForSend = 0.0;
+	/** Not to send cursor movement while cursor is not moving. */
+	FVector2D LastTimeRemoteInputStagingUV = FVector2D::ZeroVector;
 
 public:
 	FWendyImageRepNetwork(const FWendyWorldConnectingInfo& InConnectingInfo);
@@ -76,11 +85,17 @@ public:
 	void SetSendImageInfo(const FString& ImageOwnerId, const FWendyDesktopImageReplicateInfo& ImageReplicateInfoToSend);
 	void ConsumeImageInfo(const FString& ImageOwnerId, TArray<FWendyDesktopImageReplicateInfo>& OutImageInfo);
 	void MarkClientRemove(const FString& InClientId);
-
+	/** Not exactly about "Image" replication, but whatever.. */
+	void SetRemoteInputInfo(const FWendyMonitorHitAndInputInfo& InInfo);
+	void ConsumeRemoteInputInfo(TArray<FWendyMonitorHitAndInputInfo>& OutInfo);
 private:
 
 	static bool RawRecvAction(FSocket* InSocket, FInternetAddr& InAddr, uint8* RecvBuffer, uint32& RecvBufferPointer);
 	static bool RawSendAction(FSocket* InSocket, FInternetAddr& InAddr, uint8* SendBuffer, uint32& SendBufferPointer);
+
+	/** Just putting repetitive common part together. */
+	static void WrappedSendAction(FWendyImageRepPacketBase* SendPacket, FSocket* InSocket, FInternetAddr& InAddr, uint8* SendBuffer, uint32& SendBufferPointer);
+	bool WrappedRecvAction_ImageData(uint8* RecvBuffer, uint32& RecvBufferPointer);
 
 	/** Doing something if Send/RecvStaging data gets too big (by any unexpected reason) */
 	void DisposeTooMuchStagingData();
@@ -106,6 +121,8 @@ public:
 	void SetSendImageInfo(const FString& ImageOwnerId, const FWendyDesktopImageReplicateInfo& ImageReplicateInfoToSend);
 	void ConsumeImageInfo(const FString& ImageOwnerId, TArray<FWendyDesktopImageReplicateInfo>& OutImageInfo);
 	void MarkClientRemove(const FString& InClientId);
+	void SetRemoteInputInfo(const FWendyMonitorHitAndInputInfo& InInfo);
+	void ConsumeRemoteInputInfo(TArray<FWendyMonitorHitAndInputInfo>& OutInfo);
 private:
 	FThreadSafeCounter StopTaskCounter;
 

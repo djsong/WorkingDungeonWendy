@@ -12,6 +12,7 @@ class AWendyCharacter;
 class UStaticMeshComponent;
 class UTexture2D;
 class UWendyDgSeatOriginPosComp;
+class UCameraComponent;
 
 /** 
  * It represents the seat (table and chair) that a character works in Wendy world,
@@ -34,9 +35,17 @@ protected:
 	UPROPERTY(VisibleAnywhere)
 	UStaticMeshComponent* MonitorMeshComp;
 
+	/** To be visible when focusing. */
+	UPROPERTY(VisibleAnywhere)
+	UStaticMeshComponent* HighlightOutlineMeshComp;
+
 	/** It is simply to provide a practical safe postion of this seat. Could be a FVector(and FRotator) variable, but put a component for some convenience. */
 	UPROPERTY(VisibleAnywhere)
 	UWendyDgSeatOriginPosComp* RelativeOriginComp;
+	
+	/** To be the viewtarget when myself is get focused. */
+	UPROPERTY(VisibleAnywhere)
+	UCameraComponent* FocusingCamera;
 
 	/** A resource texture showing default off state for the monitor. */
 	UPROPERTY(EditAnywhere, Category="WendyDungeonSeat")
@@ -48,6 +57,10 @@ protected:
 
 	/** The character who occupied this seat. If invalid there's no one. */
 	TWeakObjectPtr<AWendyCharacter> OwnerCharacter;
+
+private:
+	bool bFocusHovered; // Not focused yet, but like being candidate
+	bool bFocused;
 
 public:
 	/** Name of the material slot that will be applied captured desktop image.
@@ -69,6 +82,13 @@ public:
 	void FallbackToOffState();
 	/** Goes to off state only when not occupied. Safe measure */
 	void ConditionalFallbackToOffState();
+
+	void SetFocusHovered(bool bInFocusHovered);
+	bool IsFocusHovered() const { return bFocusHovered; }
+
+	void SetFocused(bool bInFocused);
+	bool IsFocused() const { return bFocused; }
+
 private:
 	void SetMonitorTextureInternal(UTexture2D* InTexture);
 
@@ -79,6 +99,11 @@ public:
 
 	void SetOwnerCharacter(AWendyCharacter* InCharacter);
 	bool IsOccupied() const;
+
+	/** Return empty string if not occupied. */
+	FString GetOwnerCharacterId() const;
+
+	FORCEINLINE const UStaticMeshComponent* GetMonitorMeshComp() const { return MonitorMeshComp; }
 };
 
 /** It could be just a FVector (and optionally FRotator), but for a little convenience.. */

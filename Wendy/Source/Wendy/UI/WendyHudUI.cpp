@@ -4,6 +4,7 @@
 #include "Components/EditableTextBox.h"
 #include "WdGameplayStatics.h"
 #include "WendyCommon.h"
+#include "WendyDungeonPlayerController.h"
 #include "WendyExtendedWidgets.h"
 #include "WendyCharacter.h"
 
@@ -11,6 +12,17 @@ UWendyHudUI::UWendyHudUI(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 {
 
+}
+
+void UWendyHudUI::NativeConstruct()
+{
+	Super::NativeConstruct();
+	AWendyDungeonPlayerController* LocalWdPC = Cast<AWendyDungeonPlayerController>(UWdGameplayStatics::GetLocalPlayerController(this));
+	if (IsValid(LocalWdPC))
+	{
+		LocalWdPC->OnExploringInputModeEvent.AddDynamic(this, &UWendyHudUI::OnWdPcExploringInputModeEvent);
+		LocalWdPC->OnUIFocusingInputModeEvent.AddDynamic(this, &UWendyHudUI::OnWdPcUIFocusingInputModeEvent);
+	}
 }
 
 void UWendyHudUI::NativeDestruct()
@@ -28,6 +40,11 @@ void UWendyHudUI::StaticWidgetPreparations()
 	if (IsValid(ET_ChatMessage))
 	{
 		ET_ChatMessage->OnTextCommitted.AddDynamic(this, &UWendyHudUI::OnChatMessageCommitted);
+	}
+
+	if (IsValid(BTN_BackToExploring))
+	{
+		BTN_BackToExploring->OnClicked.AddDynamic(this, &UWendyHudUI::OnBackToExploringButtonClicked);
 	}
 }
 
@@ -51,3 +68,27 @@ void UWendyHudUI::OnChatMessageCommitted(const FText& InText, ETextCommit::Type 
 	}
 }
 
+void UWendyHudUI::OnBackToExploringButtonClicked()
+{
+	AWendyDungeonPlayerController* LocalWdPC = Cast<AWendyDungeonPlayerController>(UWdGameplayStatics::GetLocalPlayerController(this));
+	if (IsValid(LocalWdPC))
+	{
+		LocalWdPC->ConditionalLeaveFocusMode();
+	}
+}
+
+void UWendyHudUI::OnWdPcExploringInputModeEvent()
+{
+	if (IsValid(BTN_BackToExploring))
+	{
+		BTN_BackToExploring->SetVisibility(ESlateVisibility::Hidden);
+	}
+}
+
+void UWendyHudUI::OnWdPcUIFocusingInputModeEvent()
+{
+	if (IsValid(BTN_BackToExploring))
+	{
+		BTN_BackToExploring->SetVisibility(ESlateVisibility::Visible);
+	}
+}

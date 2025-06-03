@@ -40,6 +40,8 @@ public:
 	void SetSendImageInfo(const FString& ImageOwnerId, const FWendyDesktopImageReplicateInfo& ImageReplicateInfoToSend);
 	void ConsumeImageInfo(const FString& ImageOwnerId, TArray<FWendyDesktopImageReplicateInfo>& OutImageInfo);
 	void MarkClientRemoveServerOnly(const FString& InClientId);
+	void SetRemoteInputInfo(const FWendyMonitorHitAndInputInfo& InInfo);
+	void ConsumeRemoteInputInfo(TArray<FWendyMonitorHitAndInputInfo>& OutInfo);
 };
 
 

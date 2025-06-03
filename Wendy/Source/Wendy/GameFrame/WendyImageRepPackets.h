@@ -12,6 +12,8 @@ enum class EWendyImageRepPacketType : uint8
 	/** Definitely the main shit. */
 	WIRP_IMAGEDATA,
 
+	WIRP_REMOTEINPUT,
+
 	// What else could be?
 
 
@@ -98,4 +100,28 @@ struct FWendyImageRepPacket_ImageData : public FWendyImageRepPacketBase
 
 	void FromReplicateInfo(const FString& InImageOwnerId, const FWendyDesktopImageReplicateInfo& ImageReplicateInfo);
 	void ToReplicateInfo(FString& OutImageOwnerId, FWendyDesktopImageReplicateInfo& OutImageReplicateInfo) const;
+};
+
+
+struct FWendyImageRepPacket_RemoteInput : public FWendyImageRepPacketBase
+{
+	FWendyImageRepPacket_RemoteInput()
+		: FWendyImageRepPacketBase(EWendyImageRepPacketType::WIRP_REMOTEINPUT, CalculatePacketSizeBytes())
+		, MonitorHitUV(-1.0f, -1.0f)
+		, InputKey(EWendyRemoteInputKeys::None)
+		, InputEvent(EWendyRemoteInputEvents::None)
+	{
+		FMemory::Memset(TargetUserId, 0);
+	}
+
+	TCHAR TargetUserId[WD_USER_ID_MAX_LEN_PLUS_ONE];
+	FVector2D MonitorHitUV;
+	EWendyRemoteInputKeys InputKey = EWendyRemoteInputKeys::None;
+	EWendyRemoteInputEvents InputEvent;
+
+
+	uint32 CalculatePacketSizeBytes() const;
+
+	void FromHitAndInputInfo(const FWendyMonitorHitAndInputInfo& InInfo);
+	void ToHitAndInputInfo(FWendyMonitorHitAndInputInfo& OutInfo);
 };

@@ -16,7 +16,7 @@
 #include "Misc/MessageDialog.h"
 
 /** Not so neat, but let's simply define it in hard way.. Better be scaled according to the whole number. */
-const FVector2D GDungeonSeatSelectionUIElemRelSize(0.04f, 0.04f);
+const FVector2D GDungeonSeatSelectionUIElemRelSize(0.08f, 0.08f);
 
 UWendyUIDungeonSeatSelection::UWendyUIDungeonSeatSelection(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
