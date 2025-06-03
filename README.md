@@ -23,5 +23,5 @@ Implemented custom image replication networking, a lot faster and stable for two
 Now based on Unreal Engine 5.5
 
 2025.06.03
-Focuding mode and Remote input support (from server to client only)
+Focusing mode and Remote input support (from server to client only)
 Faster image replication.
