@@ -117,8 +117,12 @@ public:
 	 * It is almost whether the owner is locally controlled character. */
 	bool ShouldCaptureLocalImage() const;
 
+	/** Returns resolution (not affected by display scale) of the first monitor 
+	 * @param bPhysical : If true, returned value is not affected by display scale. */
+	static void GetPrimaryMonitorResolution(int32& OutWidth, int32& OutHeight, bool bPhysical = true);
+
 	/** Assumes CachedDisplayMetrics is updated. */
-	FIntPoint GetDesktopResolution() const;
+	FIntPoint GetCachedDesktopResolution() const;
 
 	/** To supprt the captured image data size being different from the actual desktop resolution.
 	 * While the resolutions are represented in int format, stride is in float format, 

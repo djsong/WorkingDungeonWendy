@@ -14,14 +14,18 @@
 #include "Net/UnrealNetwork.h"
 #include "TimerManager.h"
 #include "WdGameplayStatics.h"
+#include "Wendy.h"
 #include "WendyDataStore.h"
 #include "WendyDesktopImageComponent.h"
 #include "WendyDungeonSeat.h"
 #include "WendyUINameTag.h"
+#include "WendyImageRepNetwork.h"
 #include "WendyImageRepPackets.h"
 #include "WendyGameInstance.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogWendyCharacter, Log, All);
+
+DECLARE_CYCLE_STAT(TEXT("UpdateImageReplication"), STAT_UpdateImageReplication, STATGROUP_WendyGame);
 
 static TAutoConsoleVariable<int32> CVarWdDesktopImageReplicateSize(
 	TEXT("wd.DesktopImageReplicateSize"),
@@ -32,8 +36,15 @@ static TAutoConsoleVariable<int32> CVarWdDesktopImageReplicateSize(
 static TAutoConsoleVariable<int32> CVarWdDesktopImageReplicateBunchNum(
 	TEXT("wd.DesktopImageReplicateBunchNum"),
 	1000,
-	TEXT("It directly related to image replication performance. Instead of increasing wd.DesktopImageReplicateSize, you increase this number."),
+	TEXT("It directly related to image replication performance. Instead of increasing wd.DesktopImageReplicateSize, you increase this number, but not limitless"),
 	ECVF_Default);
+
+static TAutoConsoleVariable<int32> CVarWdDesktopImageReplicateDiffMode(
+	TEXT("wd.DesktopImageReplicateDiffMode"),
+	1,
+	TEXT("Optimization option to send only changed bunch. If only one pixel in bunch has changed, the whole bunch will be sent."),
+	ECVF_Default); 
+
 
 // DesktopImageRPCInterval and DesktopImageRepInterval are old terms, when image transferring relied on unreal networking,
 // which is not anymore but the setting still works in whatever way.
@@ -62,6 +73,11 @@ static TAutoConsoleVariable<float> CVarWdChatMessageCirculatePeriod(
 int32 GetWdDesktopImageReplicateElemSize()
 {
 	return CVarWdDesktopImageReplicateSize.GetValueOnAnyThread();
+}
+
+bool IsImageReplicateDiffMode()
+{
+	return (CVarWdDesktopImageReplicateDiffMode.GetValueOnAnyThread() > 0);
 }
 
 float GetWdDesktopImageRepExtractInterval()
@@ -257,6 +273,15 @@ void AWendyCharacter::BeginPlay()
 		OwnerWorld->GetTimerManager().SetTimer(DeferredBeginPlayHandlingTH, this, &AWendyCharacter::DeferredBeginPlayHandling, 0.5f);
 	}
 	SetChatMessagesCirculationTimer();
+
+	for (FActorIterator ItActor(OwnerWorld); ItActor; ++ItActor)
+	{
+		AWendyCharacter* AsWChar = Cast<AWendyCharacter>(*ItActor);
+		if (IsValid(AsWChar) && this != AsWChar)
+		{
+			AsWChar->OnNewCharacterAppears(this);
+		}
+	}
 }
 
 void AWendyCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -421,45 +446,75 @@ void AWendyCharacter::SetupDeferredSetAccountInfoUITimer()
 
 void AWendyCharacter::UpdateDesktopImageReplication()
 {
+	SCOPE_CYCLE_COUNTER(STAT_UpdateImageReplication);
+
 	if (DesktopImageComponent != nullptr)
 	{
-		//if (IsLocallyControlled() && ShouldFinallyReplicateCaptauredImage())
+		double CurrRT = FPlatformTime::Seconds();
+
+		// @TODO Wendy Network
+		// Frequency controlling scheme here is hacky and messy.
+		// In fact, I guess it is better be handled by its own networking, instead of Unreal replication.
+
+		// If it is locally controlled.
+		// Role could either be ROLE_Authority or ROLE_AutonomousProxy
+		if (GetLocalRole() == ROLE_Authority || GetLocalRole() == ROLE_AutonomousProxy 
+			|| IsLocallyControlled() //<- This condition might be redundant, but just make things sure.
+			)
 		{
-			double CurrRT = FPlatformTime::Seconds();
+			// If false, it uses RPC. Server if true, Client if false. 
+			//const bool bUsedReplication= (GetLocalRole() == ROLE_Authority);
 
-			// @TODO Wendy Network
-			// Frequency controlling scheme here is hacky and messy.
-			// In fact, I guess it is better be handled by its own networking, instead of Unreal replication.
-
-			// If it is locally controlled.
-			// Role could either be ROLE_Authority or ROLE_AutonomousProxy
-			if (GetLocalRole() == ROLE_Authority || GetLocalRole() == ROLE_AutonomousProxy 
-				|| IsLocallyControlled() //<- This condition might be redundant, but just make things sure.
-				)
+			if ((CurrRT - LastDesktopImageRepDirtyTime >= GetWdDesktopImageRepExtractInterval()))
 			{
-				// If false, it uses RPC. Server if true, Client if false. 
-				//const bool bUsedReplication= (GetLocalRole() == ROLE_Authority);
-
-				if ((CurrRT - LastDesktopImageRepDirtyTime >= GetWdDesktopImageRepExtractInterval()))
+				// Now we won't even use Unreal replication for this..
+				UWendyGameInstance* WdGameInst = Cast<UWendyGameInstance>(UGameplayStatics::GetGameInstance(this));
+				if (IsValid(WdGameInst) 
+					// UserAccountInfo is being set deferred, should wait until it is set.
+					&& (ConnectedUserAccountInfo.UserId.Len() > 0)
+					)
 				{
-					// Now we won't even use Unreal replication for this..
-					UWendyGameInstance* WdGameInst = Cast<UWendyGameInstance>(UGameplayStatics::GetGameInstance(this));
-					if (IsValid(WdGameInst) 
-						// UserAccountInfo is being set deferred, should wait until it is set.
-						&& (ConnectedUserAccountInfo.UserId.Len() > 0)
-						)
+#if WENDY_IMAGE_SEND_STAGING_BUNCH
+					TArray<FWendyDesktopImageReplicateInfo> ExtractedImageInfos;
+#endif
+					int32 ExtractAndSendNum = 0;
+					int32 ExtractAndSendSimpleLoopNum = 0;
+					const int32 ExtractAndSendMaxNum = CVarWdDesktopImageReplicateBunchNum.GetValueOnGameThread();
+					while(ExtractAndSendNum < ExtractAndSendMaxNum)
+					//for (int32 RepIdx = 0; RepIdx < CVarWdDesktopImageReplicateBunchNum.GetValueOnGameThread(); ++RepIdx)
 					{
-						for (int32 RepIdx = 0; RepIdx < CVarWdDesktopImageReplicateBunchNum.GetValueOnGameThread(); ++RepIdx)
+						FWendyDesktopImageReplicateInfo LocalReplicateInfo;
+						LocalReplicateInfo.ImageData.AddZeroed(GetWdDesktopImageReplicateElemSize());
+						DesktopImageComponent->ExtractReplicateInfo(LocalReplicateInfo);
+
+						if (IsUpdatedImageRepInfo(LocalReplicateInfo) || (false == IsImageReplicateDiffMode()))
 						{
-							FWendyDesktopImageReplicateInfo LocalReplicateInfo;
-							LocalReplicateInfo.ImageData.AddZeroed(GetWdDesktopImageReplicateElemSize());
-							DesktopImageComponent->ExtractReplicateInfo(LocalReplicateInfo);
+#if WENDY_IMAGE_SEND_STAGING_BUNCH		
+							ExtractedImageInfos.Add(LocalReplicateInfo);
+#else
 							WdGameInst->SetSendImageInfo(ConnectedUserAccountInfo.UserId, LocalReplicateInfo);
+#endif
+							if (IsImageReplicateDiffMode())
+							{
+								UpdateLastSentWholeImageRepInfo(LocalReplicateInfo);
+							}
+
+							++ExtractAndSendNum;
+						}
+
+						// In diff mode almost nothing might be sent when the monitor is in static state,
+						// so put some safety measure.
+						if (++ExtractAndSendSimpleLoopNum >= ExtractAndSendMaxNum * 2)
+						{
+							break;
 						}
 					}
-
-					LastDesktopImageRepDirtyTime = CurrRT;
+#if WENDY_IMAGE_SEND_STAGING_BUNCH
+					WdGameInst->SetSendImageInfo(ConnectedUserAccountInfo.UserId, ExtractedImageInfos);						
+#endif
 				}
+
+				LastDesktopImageRepDirtyTime = CurrRT;
 			}
 		}
 		
@@ -618,6 +673,32 @@ void AWendyCharacter::ZoomCameraView(float InAmount)
 			);
 		}
 	}
+}
+
+bool AWendyCharacter::IsUpdatedImageRepInfo(const FWendyDesktopImageReplicateInfo& InCheckInfo) const
+{
+	const FWendyDesktopImageReplicateInfo* FoundOne = LastSentWholeImageRepInfo.Find(InCheckInfo.UpdateBeginIndex);
+	return (nullptr == FoundOne || *FoundOne != InCheckInfo);
+}
+
+void AWendyCharacter::UpdateLastSentWholeImageRepInfo(const FWendyDesktopImageReplicateInfo& InCheckInfo)
+{
+	FWendyDesktopImageReplicateInfo& FoundOrAddElem = LastSentWholeImageRepInfo.FindOrAdd(InCheckInfo.UpdateBeginIndex);
+	FoundOrAddElem = InCheckInfo;
+}
+
+void AWendyCharacter::ResetLastSentWholeImageRepInfo()
+{
+	// Simply empty it then it will send all for the first frame.
+	LastSentWholeImageRepInfo.Empty();
+}
+
+void AWendyCharacter::OnNewCharacterAppears(AWendyCharacter* InNewChar)
+{
+	// Regardless of server or client, it needs to reset image sent state so it can start over for the new character
+	// or the new character receives only changed part not the whole image.
+
+	ResetLastSentWholeImageRepInfo();
 }
 
 bool AWendyCharacter::SetPickedHomeSeatPosition(FVector2D InPickedPosition)

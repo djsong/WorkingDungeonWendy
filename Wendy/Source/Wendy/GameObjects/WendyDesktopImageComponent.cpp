@@ -58,7 +58,7 @@ static TAutoConsoleVariable<float> CVarWdOutputTextureUpdatePeriod_RandFrac(
 
 static TAutoConsoleVariable<float> CVarWdDesktopCaptureBasePeriod(
 	TEXT("wd.DesktopCaptureBasePeriod"),
-	0.4f,
+	0.2f,
 	TEXT("A base interval to capture the desktop image, the first and fundamental step to acqure desktop image.")
 	TEXT("Having this interval variable means that image capturing is not incremental."),
 	ECVF_Default);
@@ -160,6 +160,11 @@ void UWendyDesktopImageComponent::UpdateCachedDisplayMetrics()
 	// @TODO Wendy DesktopImageComponent
 	// There surely is a way to get current metric too. I just don't feel to need for such thing before make it working in rough way.
 	FSlateApplication::Get().GetInitialDisplayMetrics(CachedDisplayMetrics);
+
+	// At this point CachedDisplayMetrics.PrimaryDisplayWidth/Height can be scaled value, but we want unscaled physical resolution.
+	// but couldn't we just use GetPrimaryMonitorResolution from the first place? Is there any other possible use of CachedDisplayMetrics?
+
+	GetPrimaryMonitorResolution(CachedDisplayMetrics.PrimaryDisplayWidth, CachedDisplayMetrics.PrimaryDisplayHeight, true);
 }
 
 #if PLATFORM_WINDOWS
@@ -222,10 +227,10 @@ namespace WendyWindowsDesktopCaptureImpl
 	 * #WendyDealsWithPrimaryDisplayOnly */
 	void GetPrimaryDisplayCapturedData(TArray<FColor>& OutCapturedImageData)
 	{
-		// Is there any other GetSystemMetrics options that retrieves other display size?
-		// This should be the same as what has reported by GetDesktopResolution, but what if not? At least make it not getting crash.
-		int32 PrimDisplayWidth = ::GetSystemMetrics(SM_CXSCREEN);
-		int32 PrimDisplayHeight = ::GetSystemMetrics(SM_CYSCREEN);
+		int32 PrimDisplayWidth = 0;
+		int32 PrimDisplayHeight = 0;
+		// It should be physical resolution not being affected by display scale.
+		UWendyDesktopImageComponent::GetPrimaryMonitorResolution(PrimDisplayWidth, PrimDisplayHeight, true);
 
 		// I just copied the rest of code from some place..
 		HDC hScrDC = ::CreateDC(TEXT("DISPLAY"), nullptr, nullptr, nullptr); // Does that specified name do some?
@@ -283,7 +288,7 @@ void UWendyDesktopImageComponent::UpdateLocalDesktopCaptureStaging()
 
 	FIntPoint WendyDesktopImageSize = GetWendyDesktopImageSize();
 
-	const FIntPoint SrcDesktopResolution = GetDesktopResolution();
+	const FIntPoint SrcDesktopResolution = GetCachedDesktopResolution();
 	const FVector2D ImageStagingIndexStride = GetDesktopImageStagingStride();
 	const int32 StagingItorMaxNum = CVarWdDesktopImageStagingPixelsInOneTick.GetValueOnGameThread();
 	for (int32 CountIndex = 0; CountIndex < StagingItorMaxNum; ++CountIndex)
@@ -555,7 +560,26 @@ bool UWendyDesktopImageComponent::ShouldCaptureLocalImage() const
 	return false;
 }
 
-FIntPoint UWendyDesktopImageComponent::GetDesktopResolution() const
+void UWendyDesktopImageComponent::GetPrimaryMonitorResolution(int32& OutWidth, int32& OutHeight, bool bPhysical)
+{
+	// GetSystemMetrics is still not the right answer when display is scaled.
+	OutWidth = ::GetSystemMetrics(SM_CXSCREEN);
+	OutHeight = ::GetSystemMetrics(SM_CYSCREEN);
+
+	if (bPhysical)
+	{
+		// Below is needed for getting device resolution when display is scaled.
+		DEVMODE devMode = {};
+		devMode.dmSize = sizeof(DEVMODE);
+		if (EnumDisplaySettings(nullptr, ENUM_CURRENT_SETTINGS, &devMode))
+		{
+			OutWidth = devMode.dmPelsWidth;
+			OutHeight = devMode.dmPelsHeight;
+		}
+	}
+}
+
+FIntPoint UWendyDesktopImageComponent::GetCachedDesktopResolution() const
 {
 	// #WendyDealsWithPrimaryDisplayOnly
 	// Not considering multiple monitors here. Any though on handling such case? Probably very far..
@@ -565,7 +589,7 @@ FIntPoint UWendyDesktopImageComponent::GetDesktopResolution() const
 FVector2D UWendyDesktopImageComponent::GetDesktopImageStagingStride() const
 {
 	// Here need values in floating point..
-	FVector2D DesktopResolutionV(GetDesktopResolution());
+	FVector2D DesktopResolutionV(GetCachedDesktopResolution());
 	FVector2D InternalImageResolutionV(GetWendyDesktopImageSize());
 
 	return DesktopResolutionV / InternalImageResolutionV;

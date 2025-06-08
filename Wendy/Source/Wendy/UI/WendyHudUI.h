@@ -24,11 +24,15 @@ protected:
 	UPROPERTY(Transient, meta = (BindWidget))
 	UWdButton* BTN_BackToExploring = nullptr;
 
+	UPROPERTY(Transient, meta = (BindWidget))
+	UWdTextBlock* TB_FocusModeMessage = nullptr;
+
 public:
 	UWendyHudUI(const FObjectInitializer& ObjectInitializer);
 
 	virtual void NativeConstruct() override;
 	virtual void NativeDestruct() override;
+	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
 	virtual void StaticWidgetPreparations() override;
 
 	UFUNCTION()
@@ -41,5 +45,7 @@ public:
 	void OnWdPcExploringInputModeEvent();
 	UFUNCTION()
 	void OnWdPcUIFocusingInputModeEvent();
+
+	void UpdateFocusModeMessage();
 };
 

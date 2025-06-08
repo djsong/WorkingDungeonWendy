@@ -46,7 +46,13 @@ void UWendyGameInstance::TermImageRepNetwork()
 	}
 }
 
-void UWendyGameInstance::SetSendImageInfo(const FString& ImageOwnerId, const FWendyDesktopImageReplicateInfo& ImageReplicateInfoToSend)
+void UWendyGameInstance::SetSendImageInfo(const FString& ImageOwnerId, 
+#if WENDY_IMAGE_SEND_STAGING_BUNCH
+	const TArray<FWendyDesktopImageReplicateInfo>& ImageReplicateInfoToSend
+#else
+	const FWendyDesktopImageReplicateInfo& ImageReplicateInfoToSend
+#endif
+)
 {
 	if (ImageRepNetworkThreadWorker.IsValid())
 	{

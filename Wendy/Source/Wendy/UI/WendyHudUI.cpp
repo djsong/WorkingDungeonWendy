@@ -27,12 +27,27 @@ void UWendyHudUI::NativeConstruct()
 
 void UWendyHudUI::NativeDestruct()
 {
-	Super::NativeDestruct();
-
 	if (IsValid(ET_ChatMessage))
 	{
 		ET_ChatMessage->OnTextCommitted.RemoveAll(this);
 	}
+
+	AWendyDungeonPlayerController* LocalWdPC = Cast<AWendyDungeonPlayerController>(UWdGameplayStatics::GetLocalPlayerController(this));
+	if (IsValid(LocalWdPC))
+	{
+		LocalWdPC->OnExploringInputModeEvent.RemoveAll(this);
+		LocalWdPC->OnUIFocusingInputModeEvent.RemoveAll(this);
+	}
+
+	Super::NativeDestruct();
+}
+
+void UWendyHudUI::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
+{
+	Super::NativeTick(MyGeometry, InDeltaTime);
+
+	// Tried to do this on event time, but why bothers? It won't take perfomance that seriously.
+	UpdateFocusModeMessage();
 }
 
 void UWendyHudUI::StaticWidgetPreparations()
@@ -90,5 +105,21 @@ void UWendyHudUI::OnWdPcUIFocusingInputModeEvent()
 	if (IsValid(BTN_BackToExploring))
 	{
 		BTN_BackToExploring->SetVisibility(ESlateVisibility::Visible);
+	}
+}
+
+void UWendyHudUI::UpdateFocusModeMessage()
+{
+	if (IsValid(TB_FocusModeMessage))
+	{
+		AWendyDungeonPlayerController* LocalWdPC = Cast<AWendyDungeonPlayerController>(UWdGameplayStatics::GetLocalPlayerController(this));
+		if (IsValid(LocalWdPC) && LocalWdPC->HasAnyFocusHoveredSeat())
+		{
+			TB_FocusModeMessage->SetVisibility(ESlateVisibility::HitTestInvisible);
+		}
+		else
+		{
+			TB_FocusModeMessage->SetVisibility(ESlateVisibility::Hidden);
+		}
 	}
 }

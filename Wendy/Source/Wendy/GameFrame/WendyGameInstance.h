@@ -37,7 +37,13 @@ public:
 
 	/** Theoretically you call it as much as you want still ImageRepNetwork should transfer.
 	 * but in reality do not go that far.. */
-	void SetSendImageInfo(const FString& ImageOwnerId, const FWendyDesktopImageReplicateInfo& ImageReplicateInfoToSend);
+	void SetSendImageInfo(const FString& ImageOwnerId, 
+#if WENDY_IMAGE_SEND_STAGING_BUNCH
+		const TArray<FWendyDesktopImageReplicateInfo>& ImageReplicateInfoToSend
+#else
+		const FWendyDesktopImageReplicateInfo& ImageReplicateInfoToSend
+#endif
+	);
 	void ConsumeImageInfo(const FString& ImageOwnerId, TArray<FWendyDesktopImageReplicateInfo>& OutImageInfo);
 	void MarkClientRemoveServerOnly(const FString& InClientId);
 	void SetRemoteInputInfo(const FWendyMonitorHitAndInputInfo& InInfo);

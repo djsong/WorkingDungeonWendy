@@ -70,6 +70,18 @@ EWendyRemoteInputKeys FromFKeyToWendyRemoteKey(const FKey InFKey)
 	{
 		return EWendyRemoteInputKeys::Key_Delete;
 	}
+	else if (InFKey == EKeys::Slash)
+	{
+		return EWendyRemoteInputKeys::Key_Slash;
+	}
+	else if (InFKey == EKeys::Backslash)
+	{
+		return EWendyRemoteInputKeys::Key_Backslash;
+	}
+	else if (InFKey == EKeys::Tilde)
+	{
+		return EWendyRemoteInputKeys::Key_Tilde;
+	}
 	else if (InFKey == EKeys::Zero)
 	{
 		return EWendyRemoteInputKeys::Key_Zero;
@@ -294,6 +306,12 @@ uint8 FromWendyRemoteKeyToWinVK(EWendyRemoteInputKeys InRemoteInputKey)
 		return VK_DOWN;
 	case EWendyRemoteInputKeys::Key_Delete:
 		return VK_DELETE;
+	case EWendyRemoteInputKeys::Key_Slash:
+		return VK_OEM_2;
+	case EWendyRemoteInputKeys::Key_Backslash:
+		return VK_OEM_5;
+	case EWendyRemoteInputKeys::Key_Tilde:
+		return VK_OEM_3;
 	case EWendyRemoteInputKeys::Key_Zero:
 		return '0';
 	case EWendyRemoteInputKeys::Key_One:

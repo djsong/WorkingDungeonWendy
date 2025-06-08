@@ -231,59 +231,65 @@ void FWendyImageRepNetwork::UpdateTickServer(float InDeltaSecond)
 
 	////////////////////
 	//// To send 
-	{
 		
+	{
+		FScopeLock ImageLock(&ImageDataAccessMutex);
+
 		for (int32 ClientIdx = 0; ClientIdx < ConnectedClients.Num(); ++ClientIdx)
 		{
 			FWendyBoundSocketAndRelevantInfo& ClientInfo = ConnectedClients[ClientIdx];
-		
+
+			for (const auto& ItStagingRepInfo : SendStagingReplicateInfo)
 			{
-				FScopeLock ImageLock(&ImageDataAccessMutex);
-
-				for (const auto& ItStagingRepInfo : SendStagingReplicateInfo)
+				// Omitting this check is not a big problem, then just sending its own data back again, won't be that pretty.
+				if (ItStagingRepInfo.Key == ClientInfo.UserIdentification)
 				{
-					// Omitting this check is not a big problem, then just sending its own data back again, won't be that pretty.
-					if (ItStagingRepInfo.Key == ClientInfo.UserIdentification)
-					{
-						continue;
-					}
+					continue;
+				}
 
-					const TArray<FWendyDesktopImageReplicateInfo>& ImageReplicateInfoForClient = ItStagingRepInfo.Value;
-					if (ImageReplicateInfoForClient.Num() > 0)
+				const TArray<FWendyDesktopImageReplicateInfo>& ImageReplicateInfoForClient = ItStagingRepInfo.Value;
+				if (ImageReplicateInfoForClient.Num() > 0)
+				{
+					for (int32 RepIdx = 0; RepIdx < ImageReplicateInfoForClient.Num(); ++RepIdx)
 					{
-						for (int32 RepIdx = 0; RepIdx < ImageReplicateInfoForClient.Num(); ++RepIdx)
-						{
-							const FWendyDesktopImageReplicateInfo& SendImageReplicateInfo = ImageReplicateInfoForClient[RepIdx];
-							FWendyImageRepPacket_ImageData ImagePacket;
-							ImagePacket.FromReplicateInfo(ItStagingRepInfo.Key, SendImageReplicateInfo);
-							WrappedSendAction(&ImagePacket, ClientInfo.SocketPtr, *ClientInfo.BoundAddr.Get(), ClientInfo.SendBuffer, ClientInfo.SendBufferPointer);
-						}
+						FWendyImageRepPacket_ImageData ImagePacket;
+						ImagePacket.FromReplicateInfo(ItStagingRepInfo.Key, ImageReplicateInfoForClient[RepIdx]);
+						WrappedSendAction(&ImagePacket, ClientInfo.SocketPtr, *ClientInfo.BoundAddr.Get(), ClientInfo.SendBuffer, ClientInfo.SendBufferPointer);
 					}
 				}
-				// Sent then empty.
-				for (auto& ItStagingRepInfo : SendStagingReplicateInfo)
-				{
-					ItStagingRepInfo.Value.Empty();
-				}
-			}
-
-			{
-				FScopeLock Lock(&RemoteInoputInfoMutex);
-				for (const FWendyMonitorHitAndInputInfo& InputInfo : SendStagingRemoteInoputInfo)
-				{
-					// Unlike image info, Input info is being sent to target client only.
-					if (InputInfo.TargetUserId == ClientInfo.UserIdentification)
-					{
-						FWendyImageRepPacket_RemoteInput InputPacket;
-						InputPacket.FromHitAndInputInfo(InputInfo);
-						WrappedSendAction(&InputPacket, ClientInfo.SocketPtr, *ClientInfo.BoundAddr.Get(), ClientInfo.SendBuffer, ClientInfo.SendBufferPointer);
-					}
-				}
-				// Sent then empty.
-				SendStagingRemoteInoputInfo.Empty();
 			}
 		}
+		// SendStagingReplicateInfo cannot be empty while sending above because one info might be sent to more than one client.
+		// Assume they are all sent as requested and clear them now.
+		for (auto& ItStagingRepInfo : SendStagingReplicateInfo)
+		{
+			ItStagingRepInfo.Value.Empty();
+		}
+	}
 
+	// Input data won't be that frequent like image data, so check its size first.
+	if(SendStagingRemoteInputInfo.Num() > 0)
+	{
+		FScopeLock Lock(&RemoteInputInfoMutex);
+		for (int32 ClientIdx = 0; ClientIdx < ConnectedClients.Num(); ++ClientIdx)
+		{
+			FWendyBoundSocketAndRelevantInfo& ClientInfo = ConnectedClients[ClientIdx];
+			// Intentionally from the back, because array element will be removed inside of loop
+			for (int32 InfoIdx = SendStagingRemoteInputInfo.Num() - 1; InfoIdx >= 0; --InfoIdx)
+			{
+				const FWendyMonitorHitAndInputInfo& InputInfo = SendStagingRemoteInputInfo[InfoIdx];
+				// Unlike image info, Input info is being sent to target client only.
+				if (InputInfo.TargetUserId == ClientInfo.UserIdentification)
+				{
+					FWendyImageRepPacket_RemoteInput InputPacket;
+					InputPacket.FromHitAndInputInfo(InputInfo);
+					WrappedSendAction(&InputPacket, ClientInfo.SocketPtr, *ClientInfo.BoundAddr.Get(), ClientInfo.SendBuffer, ClientInfo.SendBufferPointer);
+
+					// Sent then remove.
+					SendStagingRemoteInputInfo.RemoveAt(InfoIdx);
+				}
+			}
+		}
 	}
 
 	DisposeTooMuchStagingData();
@@ -322,7 +328,7 @@ void FWendyImageRepNetwork::UpdateTickClient(float InDeltaSecond)
 						// It will be serialized and return true only when received enough for this packet, or recv again and serialize later.
 						if (InputPacket.SerializeFromRecvBuffer(ConnectionBase.RecvBuffer, ConnectionBase.RecvBufferPointer))
 						{
-							FScopeLock Lock(&RemoteInoputInfoMutex);
+							FScopeLock Lock(&RemoteInputInfoMutex);
 
 							FWendyMonitorHitAndInputInfo RemoteInputInfo;
 							InputPacket.ToHitAndInputInfo(RemoteInputInfo);
@@ -383,7 +389,13 @@ void FWendyImageRepNetwork::UpdateTickClient(float InDeltaSecond)
 	DisposeTooMuchStagingData();
 }
 
-void FWendyImageRepNetwork::SetSendImageInfo(const FString& ImageOwnerId, const FWendyDesktopImageReplicateInfo& ImageReplicateInfoToSend)
+void FWendyImageRepNetwork::SetSendImageInfo(const FString& ImageOwnerId, 
+#if WENDY_IMAGE_SEND_STAGING_BUNCH
+	const TArray<FWendyDesktopImageReplicateInfo>& ImageReplicateInfoToSend
+#else
+	const FWendyDesktopImageReplicateInfo& ImageReplicateInfoToSend
+#endif
+)
 {
 	SCOPE_CYCLE_COUNTER(STAT_ImageRepNetworkSetSendImageInfo);
 	{
@@ -391,7 +403,11 @@ void FWendyImageRepNetwork::SetSendImageInfo(const FString& ImageOwnerId, const 
 		SCOPE_CYCLE_COUNTER(STAT_ImageRepNetworkSetSendImageInfoInner);
 		ensureMsgf(bIsServer || ImageOwnerId == SelfIdentification, TEXT("Any case that client (%s) send other (%s) client's data?"), *SelfIdentification, *ImageOwnerId);
 		TArray<FWendyDesktopImageReplicateInfo>& ReplicateInfoArrayRef = SendStagingReplicateInfo.FindOrAdd(ImageOwnerId);
+#if WENDY_IMAGE_SEND_STAGING_BUNCH
+		ReplicateInfoArrayRef.Append(ImageReplicateInfoToSend);
+#else
 		ReplicateInfoArrayRef.Add(ImageReplicateInfoToSend);
+#endif
 	}
 }
 
@@ -432,8 +448,8 @@ void FWendyImageRepNetwork::SetRemoteInputInfo(const FWendyMonitorHitAndInputInf
 		// Specific input event will be sent everytime, but there's interval for simple cursor movement.
 		if (HasSignificantEvent || (bEnoughTimeHasPassed && bMonitorHitUVChanged))
 		{
-			FScopeLock Lock(&RemoteInoputInfoMutex);
-			SendStagingRemoteInoputInfo.Add(InInfo);
+			FScopeLock Lock(&RemoteInputInfoMutex);
+			SendStagingRemoteInputInfo.Add(InInfo);
 
 			LastTimeRemoteInputStagingForSend = CurrTime;
 			LastTimeRemoteInputStagingUV = InInfo.MonitorHitUV;
@@ -444,7 +460,7 @@ void FWendyImageRepNetwork::SetRemoteInputInfo(const FWendyMonitorHitAndInputInf
 void FWendyImageRepNetwork::ConsumeRemoteInputInfo(TArray<FWendyMonitorHitAndInputInfo>& OutInfo)
 {
 	{
-		FScopeLock Lock(&RemoteInoputInfoMutex);
+		FScopeLock Lock(&RemoteInputInfoMutex);
 		if (RecvStagingRemoteInoputInfo.Num() > 0)
 		{
 			OutInfo.Append(RecvStagingRemoteInoputInfo);
@@ -537,15 +553,15 @@ bool FWendyImageRepNetwork::WrappedRecvAction_ImageData(uint8* RecvBuffer, uint3
 	FWendyImageRepPacket_ImageData ImagePacket;
 	// It will be serialized and return true only when received enough for this packet, or recv again and serialize later.
 	if (ImagePacket.SerializeFromRecvBuffer(RecvBuffer, RecvBufferPointer))
-	{
-		FScopeLock ImageLock(&ImageDataAccessMutex);
-
+	{		
 		FString ImageOwnerId;
 		FWendyDesktopImageReplicateInfo ImageReplicateInfo;
 		ImagePacket.ToReplicateInfo(ImageOwnerId, ImageReplicateInfo);
-
-		TArray<FWendyDesktopImageReplicateInfo>& ReplicateInfoArrayRef = RecvStagingReplicateInfo.FindOrAdd(ImageOwnerId);
-		ReplicateInfoArrayRef.Add(ImageReplicateInfo);
+		{
+			FScopeLock ImageLock(&ImageDataAccessMutex);
+			TArray<FWendyDesktopImageReplicateInfo>& ReplicateInfoArrayRef = RecvStagingReplicateInfo.FindOrAdd(ImageOwnerId);
+			ReplicateInfoArrayRef.Add(ImageReplicateInfo);
+		}
 		return true;
 	}
 	else
@@ -643,7 +659,13 @@ void FWendyImageRepNetworkThreadWorker::Exit()
 }
 
 
-void FWendyImageRepNetworkThreadWorker::SetSendImageInfo(const FString& ImageOwnerId, const FWendyDesktopImageReplicateInfo& ImageReplicateInfoToSend)
+void FWendyImageRepNetworkThreadWorker::SetSendImageInfo(const FString& ImageOwnerId, 
+#if WENDY_IMAGE_SEND_STAGING_BUNCH
+	const TArray<FWendyDesktopImageReplicateInfo>& ImageReplicateInfoToSend
+#else
+	const FWendyDesktopImageReplicateInfo& ImageReplicateInfoToSend
+#endif
+)
 {
 	ImageRepNetwork.SetSendImageInfo(ImageOwnerId, ImageReplicateInfoToSend);
 }

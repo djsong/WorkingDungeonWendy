@@ -109,6 +109,12 @@ void AWendyDungeonSeat::SetFocusHovered(bool bInFocusHovered)
 	{
 		HighlightOutlineMeshComp->SetVisibility(bFocusHovered);
 	}
+
+	AWendyDungeonPlayerController* LocalWdPC = Cast<AWendyDungeonPlayerController>(UWdGameplayStatics::GetLocalPlayerController(this));
+	if (IsValid(LocalWdPC))
+	{
+		LocalWdPC->OnDungeonSeatFocusHovered(this, bFocusHovered);
+	}
 }
 
 void AWendyDungeonSeat::SetFocused(bool bInFocused)

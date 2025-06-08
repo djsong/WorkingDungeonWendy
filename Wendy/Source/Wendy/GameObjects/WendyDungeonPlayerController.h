@@ -55,14 +55,21 @@ private:
 	void TryEnterFocusMode();
 	void LeaveFocusMode();
 	bool bInFocusingMode = false;
+	bool bHasAnySeatFocusHovered = false;
+
+	/** Valid only when there is focus hovered */
+	TWeakObjectPtr<AWendyDungeonSeat> FocusHoveredSeat = nullptr;
 
 public:
 	void ConditionalLeaveFocusMode();
 
 	/** Returns null if not focusing at all. */
 	AWendyDungeonSeat* GetCurrFocusingSeat() const;
+	/** Being called both for set and unset. */
+	void OnDungeonSeatFocusHovered(AWendyDungeonSeat* TargetSeat, bool bFocusHovered);
 
 	bool IsInFocusingMode() const { return bInFocusingMode; }
+	bool HasAnyFocusHoveredSeat() const { return FocusHoveredSeat.IsValid(); }
 
 	bool HasValidFocusingMonitorHitInputInfo() const { return FocusingModeMonitorHitInputInfo.HasValidInfo(); }
 	const FWendyMonitorHitAndInputInfo& GetFocusingMonitorHitInputInfo() const { return FocusingModeMonitorHitInputInfo; }

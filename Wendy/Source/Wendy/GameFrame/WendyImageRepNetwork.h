@@ -13,6 +13,10 @@ class FSocket;
 /** Need to be bigger than the max packet size. */
 const int32 RECEIVE_SEND_BUFFER_SIZE = MAX_PACKET_SIZE * 1000;
 
+/** Whether to send one by one (0) or altogether as array (1) 
+ * Set to 1 can give a chance to optimization, but seems unstable. */
+#define WENDY_IMAGE_SEND_STAGING_BUNCH 0
+
 /** Just a bunch */
 struct FWendyBoundSocketAndRelevantInfo
 {
@@ -51,13 +55,13 @@ class FWendyImageRepNetwork
 	FCriticalSection ClientInfoAccessMutex;
 	FCriticalSection ImageDataAccessMutex;
 	FCriticalSection ClientRemoveMutex;
-	FCriticalSection RemoteInoputInfoMutex;
+	FCriticalSection RemoteInputInfoMutex;
 	
 	/** An element per each SetSendImageInfo call, then removed on socket send. 
 	 * Accessed from both game and this network thread. 
 	 * Key is connected client's identifier (most likely UserId). */
 	TMap<FString, TArray<FWendyDesktopImageReplicateInfo>> SendStagingReplicateInfo;
-
+	
 	/** Just the opposite of SendStagingReplicateInfo. 
 	 * Key is the identifier of original image data owner. */
 	TMap<FString, TArray<FWendyDesktopImageReplicateInfo>> RecvStagingReplicateInfo;
@@ -65,7 +69,7 @@ class FWendyImageRepNetwork
 	/** If any Send/RecvStagingReplicateInfo bound to an account becomes larger than this value, it will be abandoned. */
 	const int32 STAGING_DATA_SIZE_REGARDED_TOO_MUCH = 100000;
 
-	TArray<FWendyMonitorHitAndInputInfo> SendStagingRemoteInoputInfo;
+	TArray<FWendyMonitorHitAndInputInfo> SendStagingRemoteInputInfo;
 	TArray<FWendyMonitorHitAndInputInfo> RecvStagingRemoteInoputInfo;
 	/** To control the frequency of sending mouse cursor movement. */
 	double LastTimeRemoteInputStagingForSend = 0.0;
@@ -82,7 +86,13 @@ public:
 		void UpdateTickClient(float InDeltaSecond);
 		 
 	/** Feeding/Consuming from main thread */
-	void SetSendImageInfo(const FString& ImageOwnerId, const FWendyDesktopImageReplicateInfo& ImageReplicateInfoToSend);
+	void SetSendImageInfo(const FString& ImageOwnerId, 
+#if WENDY_IMAGE_SEND_STAGING_BUNCH
+		const TArray<FWendyDesktopImageReplicateInfo>& ImageReplicateInfoToSend
+#else
+		const FWendyDesktopImageReplicateInfo& ImageReplicateInfoToSend
+#endif
+	);
 	void ConsumeImageInfo(const FString& ImageOwnerId, TArray<FWendyDesktopImageReplicateInfo>& OutImageInfo);
 	void MarkClientRemove(const FString& InClientId);
 	/** Not exactly about "Image" replication, but whatever.. */
@@ -118,7 +128,13 @@ public:
 	virtual void Exit() override;
 	// End FRunnable interface
 
-	void SetSendImageInfo(const FString& ImageOwnerId, const FWendyDesktopImageReplicateInfo& ImageReplicateInfoToSend);
+	void SetSendImageInfo(const FString& ImageOwnerId, 
+#if WENDY_IMAGE_SEND_STAGING_BUNCH
+		const TArray<FWendyDesktopImageReplicateInfo>& ImageReplicateInfoToSend
+#else
+		const FWendyDesktopImageReplicateInfo& ImageReplicateInfoToSend
+#endif	
+	);
 	void ConsumeImageInfo(const FString& ImageOwnerId, TArray<FWendyDesktopImageReplicateInfo>& OutImageInfo);
 	void MarkClientRemove(const FString& InClientId);
 	void SetRemoteInputInfo(const FWendyMonitorHitAndInputInfo& InInfo);

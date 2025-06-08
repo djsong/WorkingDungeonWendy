@@ -7,6 +7,7 @@
 #include "WendyCommon.h"
 #include "WendyCharacter.h"
 #include "WendyDataStore.h"
+#include "WendyDesktopImageComponent.h"
 #include "WendyDungeonSeat.h"
 #include "WendyGameInstance.h"
 #include "WendyUIDungeonSeatSelection.h"
@@ -126,10 +127,11 @@ bool AWendyDungeonPlayerController::InputKey(const FInputKeyParams& Params)
 	{
 		InputKeyInputKey = EWendyRemoteInputKeys::MLB;
 
-		if (Params.Event == EInputEvent::IE_Released)
+		// Too much misclick if entering focus mode on mouse left button.
+		/*if (Params.Event == EInputEvent::IE_Released)
 		{
 			TryEnterFocusMode();
-		}
+		}*/
 	}
 	else if (Params.Key == EKeys::RightMouseButton)
 	{
@@ -141,6 +143,11 @@ bool AWendyDungeonPlayerController::InputKey(const FInputKeyParams& Params)
 		if (FKeyConverted != EWendyRemoteInputKeys::None)
 		{
 			InputKeyInputKey = FKeyConverted;
+		}
+
+		if (Params.Key == EKeys::F && Params.Event == EInputEvent::IE_Released)
+		{
+			TryEnterFocusMode();
 		}
 	}
 
@@ -180,8 +187,10 @@ void AWendyDungeonPlayerController::SimulateRemoteInput()
 		TArray<FWendyMonitorHitAndInputInfo> RemoteInputInfo;
 		WdGameInst->ConsumeRemoteInputInfo(RemoteInputInfo);
 #if PLATFORM_WINDOWS
-		const int32 PrimDisplayWidth = ::GetSystemMetrics(SM_CXSCREEN);
-		const int32 PrimDisplayHeight = ::GetSystemMetrics(SM_CYSCREEN);
+		int32 PrimDisplayWidth = 0;
+		int32 PrimDisplayHeight = 0;
+		// Here it has to be logical resolution.
+		UWendyDesktopImageComponent::GetPrimaryMonitorResolution(PrimDisplayWidth, PrimDisplayHeight, false);
 
 		for (const FWendyMonitorHitAndInputInfo& InputInfo : RemoteInputInfo)
 		{
@@ -417,4 +426,22 @@ AWendyDungeonSeat* AWendyDungeonPlayerController::GetCurrFocusingSeat() const
 		}
 	}
 	return nullptr;
+}
+
+void AWendyDungeonPlayerController::OnDungeonSeatFocusHovered(AWendyDungeonSeat* TargetSeat, bool bFocusHovered)
+{
+	if (IsValid(TargetSeat))
+	{
+		if (bFocusHovered)
+		{
+			FocusHoveredSeat = TargetSeat;
+		}
+		else
+		{
+			if (FocusHoveredSeat.IsValid() && FocusHoveredSeat.Get() == TargetSeat)
+			{
+				FocusHoveredSeat = nullptr;
+			}
+		}
+	}
 }

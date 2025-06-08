@@ -70,6 +70,11 @@ struct FWendyReplicatedColor
 	uint8 G;
 	UPROPERTY(Transient)
 	uint8 B;
+
+	FORCEINLINE bool operator==(const FWendyReplicatedColor& Other) const
+	{
+		return (this->R == Other.R) && (this->G == Other.G) && (this->B == Other.B);
+	}
 };
 
 /** More structed info that is used for replicating the data stream of FWendyReplicatedColor */
@@ -93,6 +98,17 @@ struct FWendyDesktopImageReplicateInfo
 	/** Part of whole image data that is transferred and to be updated this time. */
 	UPROPERTY(Transient)
 	TArray<FWendyReplicatedColor> ImageData;
+
+	FORCEINLINE bool operator==(const FWendyDesktopImageReplicateInfo& Other) const
+	{
+		return (this->UpdateBeginIndex == Other.UpdateBeginIndex)
+			&& (this->UpdateElemNum == Other.UpdateElemNum)
+			&& (this->ImageData == Other.ImageData);
+	}
+	FORCEINLINE bool operator!=(const FWendyDesktopImageReplicateInfo& Other) const
+	{
+		return !(*this == Other);
+	}
 };
 
 /** The user account info like user name. */
@@ -127,6 +143,9 @@ enum class EWendyRemoteInputKeys : uint8
 	Key_Right,
 	Key_Down,
 	Key_Delete,
+	Key_Slash,
+	Key_Backslash,
+	Key_Tilde,
 
 	Key_Zero,
 	Key_One,
