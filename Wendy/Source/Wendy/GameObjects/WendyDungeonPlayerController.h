@@ -9,8 +9,7 @@
 
 class AWendyDungeonSeat;
 
-DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnExploringInputModeEvent);
-DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnUIFocusingInputModeEvent);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnWDPCInputModeSwitchEvent);
 
 /**
  * The main Wendy world playing controller.
@@ -33,9 +32,11 @@ public:
 	/** Simple helper for input mode setting */
 	void SetInputModeExploring();
 	void SetInputModeUIFocusing(bool bEnableGameInputToo);
+	void SetInputModeForDesktopFocusMode(); // A bit special..
 
-	FOnExploringInputModeEvent OnExploringInputModeEvent;
-	FOnUIFocusingInputModeEvent OnUIFocusingInputModeEvent;
+	FOnWDPCInputModeSwitchEvent OnExploringInputModeEvent;
+	FOnWDPCInputModeSwitchEvent OnUIFocusingInputModeEvent;
+	FOnWDPCInputModeSwitchEvent OnDesktopFocusingInputModeEvent;
 private:
 
 	void SimulateRemoteInput();

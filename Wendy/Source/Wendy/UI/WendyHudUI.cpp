@@ -22,6 +22,7 @@ void UWendyHudUI::NativeConstruct()
 	{
 		LocalWdPC->OnExploringInputModeEvent.AddDynamic(this, &UWendyHudUI::OnWdPcExploringInputModeEvent);
 		LocalWdPC->OnUIFocusingInputModeEvent.AddDynamic(this, &UWendyHudUI::OnWdPcUIFocusingInputModeEvent);
+		LocalWdPC->OnDesktopFocusingInputModeEvent.AddDynamic(this, &UWendyHudUI::OnWdDesktopFocusingInputModeEvent);
 	}
 }
 
@@ -37,6 +38,7 @@ void UWendyHudUI::NativeDestruct()
 	{
 		LocalWdPC->OnExploringInputModeEvent.RemoveAll(this);
 		LocalWdPC->OnUIFocusingInputModeEvent.RemoveAll(this);
+		LocalWdPC->OnDesktopFocusingInputModeEvent.RemoveAll(this);
 	}
 
 	Super::NativeDestruct();
@@ -101,6 +103,14 @@ void UWendyHudUI::OnWdPcExploringInputModeEvent()
 }
 
 void UWendyHudUI::OnWdPcUIFocusingInputModeEvent()
+{
+	if (IsValid(BTN_BackToExploring))
+	{
+		BTN_BackToExploring->SetVisibility(ESlateVisibility::Visible);
+	}
+}
+
+void UWendyHudUI::OnWdDesktopFocusingInputModeEvent()
 {
 	if (IsValid(BTN_BackToExploring))
 	{

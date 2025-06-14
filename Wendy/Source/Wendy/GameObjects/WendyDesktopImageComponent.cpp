@@ -37,7 +37,7 @@ FIntPoint GetWendyDesktopImageSize()
 
 static TAutoConsoleVariable<int32> CVarWdDesktopImageStagingPixelsInOneTick(
 	TEXT("wd.DesktopImageStagingPixelsInOneTick"),
-	200000, // It doesn't have to be in sync with CapturedImageReplicateSize
+	500000, // It doesn't have to be in sync with CapturedImageReplicateSize
 	TEXT("How many pixels are taken from the captured source in a single tick, for locally controlled owner.")
 	TEXT("This is about transferring the raw captured source to a little refined staging source in a desired size,")
 	TEXT("handling all pixels in a tick can slow down the game thread much if target resolution gets big.")
@@ -46,7 +46,7 @@ static TAutoConsoleVariable<int32> CVarWdDesktopImageStagingPixelsInOneTick(
 
 static TAutoConsoleVariable<float> CVarWdOutputTextureUpdatePeriod(
 	TEXT("wd.OutputTextureUpdatePeriod"),
-	0.2f,
+	0.1f,
 	TEXT("Regardless of the update condition of source image data, final texture update period can be delayed by this setting.")
 	TEXT("0 or negative value will make it updated whenever it is required."),
 	ECVF_Scalability);
@@ -58,7 +58,7 @@ static TAutoConsoleVariable<float> CVarWdOutputTextureUpdatePeriod_RandFrac(
 
 static TAutoConsoleVariable<float> CVarWdDesktopCaptureBasePeriod(
 	TEXT("wd.DesktopCaptureBasePeriod"),
-	0.2f,
+	0.1f,
 	TEXT("A base interval to capture the desktop image, the first and fundamental step to acqure desktop image.")
 	TEXT("Having this interval variable means that image capturing is not incremental."),
 	ECVF_Default);

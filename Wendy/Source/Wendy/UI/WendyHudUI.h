@@ -45,6 +45,8 @@ public:
 	void OnWdPcExploringInputModeEvent();
 	UFUNCTION()
 	void OnWdPcUIFocusingInputModeEvent();
+	UFUNCTION()
+	void OnWdDesktopFocusingInputModeEvent();
 
 	void UpdateFocusModeMessage();
 };

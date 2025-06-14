@@ -146,6 +146,9 @@ enum class EWendyRemoteInputKeys : uint8
 	Key_Slash,
 	Key_Backslash,
 	Key_Tilde,
+	Key_Equals,
+	Key_Comma,
+	Key_Period,
 
 	Key_Zero,
 	Key_One,

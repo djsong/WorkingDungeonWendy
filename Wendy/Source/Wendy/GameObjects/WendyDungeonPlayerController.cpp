@@ -151,6 +151,12 @@ bool AWendyDungeonPlayerController::InputKey(const FInputKeyParams& Params)
 		}
 	}
 
+	IConsoleVariable* StopProcessingWmSysCommandCVarPtr = IConsoleManager::Get().FindConsoleVariable(TEXT("w.StopProcessingWmSysCommand"));
+	if (StopProcessingWmSysCommandCVarPtr != nullptr)
+	{ // It is being set to zero at released signal in SimulateRemoteInput, but sometimes it is missing, so give some extra chance to reset.
+		StopProcessingWmSysCommandCVarPtr->SetWithCurrentPriority(0);
+	}
+
 	return Super::InputKey(Params);
 }
 
@@ -176,7 +182,28 @@ void AWendyDungeonPlayerController::SetInputModeUIFocusing(bool bEnableGameInput
 	SetShowMouseCursor(true);
 
 	OnUIFocusingInputModeEvent.Broadcast();
-	
+}
+
+void AWendyDungeonPlayerController::SetInputModeForDesktopFocusMode()
+{
+	SetInputMode(FInputModeUIOnly());
+	SetShowMouseCursor(true);
+
+	// For desktop focus mode, we need a bit special handling like mostly need the characteristic of UIOnly mode,
+	// but still need to get input down to here InputKey for remote control.
+
+	UGameViewportClient* GameViewportClient = GetWorld()->GetGameViewport();
+	if (IsValid(GameViewportClient))
+	{
+		GameViewportClient->SetIgnoreInput(false);
+
+		// Couldn't find a way by trying VC's mouse ~~ mode, so we changed engine code a bit at FSceneViewport::OnMouseButtonDown
+		// to remove several condition for calling ViewportClient->InputKey.
+		//GameViewportClient->SetMouseCaptureMode();
+		//GameViewportClient->SetMouseLockMode();
+	}
+
+	OnDesktopFocusingInputModeEvent.Broadcast();
 }
 
 void AWendyDungeonPlayerController::SimulateRemoteInput()
@@ -203,25 +230,51 @@ void AWendyDungeonPlayerController::SimulateRemoteInput()
 				
 				::SetCursorPos(CursorPos.X, CursorPos.Y);
 
-				if ((InputInfo.InputKey == EWendyRemoteInputKeys::MLB || InputInfo.InputKey == EWendyRemoteInputKeys::MRB)
-					&&
-					// Instead of simulating pressed and released each, going in simpler way simulating click event for released.
-					// It is constrained but more stable.
-					(/*InputInfo.InputEvent == EWendyRemoteInputEvents::Pressed ||*/ InputInfo.InputEvent == EWendyRemoteInputEvents::Released)
-					)
+				if (InputInfo.InputKey == EWendyRemoteInputKeys::MLB || InputInfo.InputKey == EWendyRemoteInputKeys::MRB)
 				{
-					INPUT inputs[2] = {};
+					IConsoleVariable* StopProcessingWmSysCommandCVarPtr = IConsoleManager::Get().FindConsoleVariable(TEXT("w.StopProcessingWmSysCommand"));
+					
+					const bool bConsideredMLB = (InputInfo.InputKey == EWendyRemoteInputKeys::MLB);
 
-					inputs[0].type = INPUT_MOUSE;
-					inputs[0].mi.dwFlags = (InputInfo.InputKey == EWendyRemoteInputKeys::MLB) ? MOUSEEVENTF_LEFTDOWN : MOUSEEVENTF_RIGHTDOWN;
+					if (InputInfo.InputEvent == EWendyRemoteInputEvents::Pressed)
+					{
+						// If hold remote Wendy title bar by remote input, there's no way escaping unless remote side do something,
+						// so we just prevent such thing.
+						if (StopProcessingWmSysCommandCVarPtr != nullptr)
+						{
+							StopProcessingWmSysCommandCVarPtr->SetWithCurrentPriority(1);
+						}
 
-					inputs[1].type = INPUT_MOUSE;
-					inputs[1].mi.dwFlags = (InputInfo.InputKey == EWendyRemoteInputKeys::MLB) ? MOUSEEVENTF_LEFTUP : MOUSEEVENTF_RIGHTUP;
+						INPUT input = {};
 
-					// If it doesn't work well for clicking event, we can send 2 inputs at the same time to simulate clicking event precisely.
-					::SendInput(2, inputs, sizeof(INPUT));
+						input.type = INPUT_MOUSE;
+						input.mi.dwFlags = bConsideredMLB  ? MOUSEEVENTF_LEFTDOWN : MOUSEEVENTF_RIGHTDOWN;
+												
+						// If it doesn't work well for clicking event, we can send 2 inputs at the same time to simulate clicking event precisely.
+						::SendInput(1, &input, sizeof(INPUT));
+
+					}
+					// Simulating click by released itself, which make things more stable..?.
+					else if (InputInfo.InputEvent == EWendyRemoteInputEvents::Released)
+					{
+						if (StopProcessingWmSysCommandCVarPtr != nullptr)
+						{
+							StopProcessingWmSysCommandCVarPtr->SetWithCurrentPriority(0);
+						}
+
+						INPUT inputs[2] = {};
+
+						inputs[0].type = INPUT_MOUSE;
+						inputs[0].mi.dwFlags = bConsideredMLB ? MOUSEEVENTF_LEFTDOWN : MOUSEEVENTF_RIGHTDOWN;
+
+						inputs[1].type = INPUT_MOUSE;
+						inputs[1].mi.dwFlags = bConsideredMLB ? MOUSEEVENTF_LEFTUP : MOUSEEVENTF_RIGHTUP;
+
+						// If it doesn't work well for clicking event, we can send 2 inputs at the same time to simulate clicking event precisely.
+						::SendInput(2, inputs, sizeof(INPUT));
+					}
 				}
-				else
+				else // Keyborad input
 				{
 					// Like mouse input, simulating press and release altogether for stability
 					if (InputInfo.InputEvent == EWendyRemoteInputEvents::Released)
@@ -383,7 +436,7 @@ void AWendyDungeonPlayerController::TryEnterFocusMode()
 				bInFocusingMode = true;
 				AsDungeonSeat->SetFocusHovered(false);
 				AsDungeonSeat->SetFocused(true);
-				SetInputModeUIFocusing(true); // Better allow game input for focusing mode too.
+				SetInputModeForDesktopFocusMode();
 
 				break; // Only one can be focused, no need to see more.
 			}

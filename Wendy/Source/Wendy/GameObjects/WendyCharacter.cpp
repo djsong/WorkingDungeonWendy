@@ -38,6 +38,12 @@ static TAutoConsoleVariable<int32> CVarWdDesktopImageReplicateBunchNum(
 	1000,
 	TEXT("It directly related to image replication performance. Instead of increasing wd.DesktopImageReplicateSize, you increase this number, but not limitless"),
 	ECVF_Default);
+static TAutoConsoleVariable<int32> CVarWdDesktopImageExtractItorNum(
+	TEXT("wd.DesktopImageExtractItorNum"),
+	10000,
+	TEXT("For DesktopImageReplicateDiffMode, it is supposed to be bigger than DesktopImageReplicateBunchNum,")
+	TEXT("so that iteration for image replication can be quit when iteration reaches at this count, even if there's no actual extract and replication because image is almost static."),
+	ECVF_Default);
 
 static TAutoConsoleVariable<int32> CVarWdDesktopImageReplicateDiffMode(
 	TEXT("wd.DesktopImageReplicateDiffMode"),
@@ -480,6 +486,7 @@ void AWendyCharacter::UpdateDesktopImageReplication()
 					int32 ExtractAndSendNum = 0;
 					int32 ExtractAndSendSimpleLoopNum = 0;
 					const int32 ExtractAndSendMaxNum = CVarWdDesktopImageReplicateBunchNum.GetValueOnGameThread();
+					const int32 IterateMax = CVarWdDesktopImageExtractItorNum.GetValueOnGameThread();
 					while(ExtractAndSendNum < ExtractAndSendMaxNum)
 					//for (int32 RepIdx = 0; RepIdx < CVarWdDesktopImageReplicateBunchNum.GetValueOnGameThread(); ++RepIdx)
 					{
@@ -502,9 +509,9 @@ void AWendyCharacter::UpdateDesktopImageReplication()
 							++ExtractAndSendNum;
 						}
 
-						// In diff mode almost nothing might be sent when the monitor is in static state,
-						// so put some safety measure.
-						if (++ExtractAndSendSimpleLoopNum >= ExtractAndSendMaxNum * 2)
+						// In diff mode, almost nothing might be sent when the displayed image is in static state, 
+						// then this loop can be infinite, so put some safety measure.
+						if (++ExtractAndSendSimpleLoopNum >= IterateMax)
 						{
 							break;
 						}

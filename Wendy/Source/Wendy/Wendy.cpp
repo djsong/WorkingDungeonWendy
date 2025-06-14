@@ -82,6 +82,18 @@ EWendyRemoteInputKeys FromFKeyToWendyRemoteKey(const FKey InFKey)
 	{
 		return EWendyRemoteInputKeys::Key_Tilde;
 	}
+	else if (InFKey == EKeys::Equals)
+	{
+		return EWendyRemoteInputKeys::Key_Equals;
+	}
+	else if (InFKey == EKeys::Comma)
+	{
+		return EWendyRemoteInputKeys::Key_Comma;
+	}
+	else if (InFKey == EKeys::Period)
+	{
+		return EWendyRemoteInputKeys::Key_Period;
+	}
 	else if (InFKey == EKeys::Zero)
 	{
 		return EWendyRemoteInputKeys::Key_Zero;
@@ -312,6 +324,12 @@ uint8 FromWendyRemoteKeyToWinVK(EWendyRemoteInputKeys InRemoteInputKey)
 		return VK_OEM_5;
 	case EWendyRemoteInputKeys::Key_Tilde:
 		return VK_OEM_3;
+	case EWendyRemoteInputKeys::Key_Equals:
+		return VK_OEM_PLUS;
+	case EWendyRemoteInputKeys::Key_Comma:
+		return VK_OEM_COMMA;
+	case EWendyRemoteInputKeys::Key_Period:
+		return VK_OEM_PERIOD;
 	case EWendyRemoteInputKeys::Key_Zero:
 		return '0';
 	case EWendyRemoteInputKeys::Key_One:
