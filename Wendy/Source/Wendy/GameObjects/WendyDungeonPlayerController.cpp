@@ -109,7 +109,7 @@ void AWendyDungeonPlayerController::PlayerTick(float DeltaTime)
 	SimulateRemoteInput();
 }
 
-bool AWendyDungeonPlayerController::InputKey(const FInputKeyParams& Params)
+bool AWendyDungeonPlayerController::InputKey(const FInputKeyEventArgs& Params)
 {
 	// Might refer to ClickEventKeys and UPrimitiveComponent::DispatchOnClicked
 	// but I want to put things here.

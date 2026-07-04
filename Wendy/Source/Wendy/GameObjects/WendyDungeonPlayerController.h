@@ -27,7 +27,7 @@ public:
 	virtual void BeginPlay() override;
 	virtual void OnPossess(APawn* aPawn) override;
 	virtual void PlayerTick(float DeltaTime) override;
-	virtual bool InputKey(const FInputKeyParams& Params) override;
+	virtual bool InputKey(const FInputKeyEventArgs& Params) override;
 
 	/** Simple helper for input mode setting */
 	void SetInputModeExploring();
