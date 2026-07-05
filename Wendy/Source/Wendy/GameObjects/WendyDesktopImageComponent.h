@@ -10,6 +10,8 @@
 class AWendyCharacter;
 class UTexture2D;
 
+#define WD_IMAGE_REP_PERF_CHECK STATS
+
 /** Management of acquring desktop image data 
  * either by actually capturing it from local desktop or by replicated data,
  * then also updating dynamically generated texture */
@@ -37,6 +39,12 @@ protected:
 	 * For the locally controlled owner it is from the captured image source, but not that itself, a little refined from it.
 	 */
 	TArray<FColor> SourceImageData;
+
+#if WD_IMAGE_REP_PERF_CHECK
+	int32 ReplicatedImageDataCounter = 0;
+	double LastReplicatedImageDataCounterCheckTime = 0.0;
+#endif
+
 	/**
 	 * Even before the SourceImageData..
 	 * SourceImageData is based on this data, by its own resolution.
@@ -112,6 +120,10 @@ public:
 	 * It sets only part of SourceImageData, depend on the replicate info size 
 	 */
 	void SetFromReplicateInfo(const FWendyDesktopImageReplicateInfo& InReplicateInfo);
+
+#if WD_IMAGE_REP_PERF_CHECK
+	void UpdateForImageRefPerfCheck(int32 InRepDataNum);
+#endif
 
 	/** If true, the image should be taken locally, otherwise from replicated data. 
 	 * It is almost whether the owner is locally controlled character. */

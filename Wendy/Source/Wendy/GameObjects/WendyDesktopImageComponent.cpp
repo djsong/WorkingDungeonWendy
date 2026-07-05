@@ -68,6 +68,13 @@ static TAutoConsoleVariable<float> CVarWdDesktopCaptureBasePeriod_RandFrac(
 	TEXT("A bit of random is applied every capture period. This is the fraction of original DesktopCaptureBasePeriod setting."),
 	ECVF_Default);
 
+#if WD_IMAGE_REP_PERF_CHECK
+static TAutoConsoleVariable<int32> CVarWdCountImageRepPerf(
+	TEXT("wd.CountImageRepPerf"),
+	0,
+	TEXT("Checking performance and shows stat on the screen. You might want to turn off wd.DesktopImageReplicateDiffMode for correct measurement, or at least make some movement on screen."),
+	ECVF_Default);
+#endif
 
 UWendyDesktopImageComponent::UWendyDesktopImageComponent(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
@@ -109,6 +116,15 @@ void UWendyDesktopImageComponent::TickComponent(float DeltaTime, enum ELevelTick
 		// Won't do the direct capturing job here. It will do some incremental converting..
 		UpdateLocalDesktopCaptureStaging();
 	}
+
+#if WD_IMAGE_REP_PERF_CHECK
+	if (CVarWdCountImageRepPerf.GetValueOnAnyThread() > 0
+		&& ShouldCaptureLocalImage() == false)
+	{
+		// Here is not for actual count, just for the least display because in diffmode, SetFromReplicateInfo won't even get called if screen is perfectly static.
+		UpdateForImageRefPerfCheck(0);
+	}
+#endif
 
 	// Non locally controlled owner also need output texture update.
 	// @TODO Wendy UpdateOutputTexture : but why isn't it driven by timer? I might thought about incremental processing in every tick..
@@ -540,9 +556,40 @@ void UWendyDesktopImageComponent::SetFromReplicateInfo(const FWendyDesktopImageR
 		bDirtyForTextureUpdate = true;
 	}
 
+#if WD_IMAGE_REP_PERF_CHECK
+	if (CVarWdCountImageRepPerf.GetValueOnAnyThread() > 0)
+	{
+		// Just assume that all were valid index.
+		UpdateForImageRefPerfCheck(FinalReplicatDataNum);
+	}
+#endif
+
 	// Might call UpdateOutputTexture here? Let it be done at other unified place..
 	//UpdateOutputTexture();
 }
+
+#if WD_IMAGE_REP_PERF_CHECK
+void UWendyDesktopImageComponent::UpdateForImageRefPerfCheck(int32 InRepDataNum)
+{		
+	ReplicatedImageDataCounter += InRepDataNum;
+	double CurrTime = FPlatformTime::Seconds();
+	if (CurrTime - LastReplicatedImageDataCounterCheckTime > 1.0 && SourceImageData.Num() > 0)
+	{
+		extern bool IsImageReplicateDiffMode();
+		const float FrameNum = static_cast<float>(ReplicatedImageDataCounter) / static_cast<float>(SourceImageData.Num());
+		const FString LogMsg = FString::Printf(TEXT("ImageRefPerf for %s [%d] pixels, [%.2f] frame (DiffMode? %d)"),
+			GetOwner() ? *GetOwner()->GetName() : *GetName(),			
+			ReplicatedImageDataCounter, FrameNum, 
+			IsImageReplicateDiffMode() ? 1 : 0);
+
+		const uint64 MessageKey = (uint64)this;
+		GEngine->AddOnScreenDebugMessage(MessageKey, 2.0f, FColor::Cyan, LogMsg);
+
+		ReplicatedImageDataCounter = 0;
+		LastReplicatedImageDataCounterCheckTime = CurrTime;
+	}
+}
+#endif
 
 bool UWendyDesktopImageComponent::ShouldCaptureLocalImage() const
 {
