@@ -41,16 +41,18 @@ struct FWendyImageRepPacketBase
 	bool SerializeToSendBuffer(uint8* OutSendBuffer, uint32& InOutSendBufferPointer);
 
 	/** Assumes PacketSizeBytes is already calculated before get to here.
-	 * InOutRecvBuffer will get pushed front as much as serialized bytes, also modifies InOutRecvBufferPointer.
+	 * Reads the next packet from the unread region [InOutRecvBufferReadOffset, InRecvBufferPointer) of InRecvBuffer.
+	 * On success advances InOutRecvBufferReadOffset by the packet size (no memory shift; the caller compacts once per drain).
 	 * Returns true on serialize completion. */
-	bool SerializeFromRecvBuffer(uint8* InOutRecvBuffer, uint32& InOutRecvBufferPointer);
-	/** In the case of serializing header, RecvBuffer and pointer won't get modified,
-	 * so you can use it for checking whether pointing buffer position contains some packet header data.
+	bool SerializeFromRecvBuffer(uint8* InRecvBuffer, uint32& InOutRecvBufferReadOffset, uint32 InRecvBufferPointer);
+	/** In the case of serializing header, RecvBuffer and offsets won't get modified,
+	 * so you can use it for checking whether the current read cursor points at some packet header data.
 	 * Returns true on serialize completion. */
-	bool SerializeFromRecvBuffer_HeaderOnly(uint8* InRecvBuffer, uint32 InRecvBufferPointer);
+	bool SerializeFromRecvBuffer_HeaderOnly(uint8* InRecvBuffer, uint32 InRecvBufferReadOffset, uint32 InRecvBufferPointer);
 
-	/** While this is at the base class, you must use it for derived class (struct) */
-	bool HasReceivedEnoughForPacketSerialize(uint32 InRecvBufferPointer) const;
+	/** While this is at the base class, you must use it for derived class (struct).
+	 * InAvailableBytes is the number of unread bytes currently sitting at the read cursor. */
+	bool HasReceivedEnoughForPacketSerialize(uint32 InAvailableBytes) const;
 };
 
 /** Not directly about image, but we just need this to server holds all necessary information of clients. */

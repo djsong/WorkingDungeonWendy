@@ -15,47 +15,41 @@ bool FWendyImageRepPacketBase::SerializeToSendBuffer(uint8* OutSendBuffer, uint3
 	return false;
 }
 
-bool FWendyImageRepPacketBase::SerializeFromRecvBuffer(uint8* InOutRecvBuffer, uint32& InOutRecvBufferPointer)
+bool FWendyImageRepPacketBase::SerializeFromRecvBuffer(uint8* InRecvBuffer, uint32& InOutRecvBufferReadOffset, uint32 InRecvBufferPointer)
 {
-	if (HasReceivedEnoughForPacketSerialize(InOutRecvBufferPointer))
+	// InRecvBufferPointer is the write head (total valid bytes); the unread region is [ReadOffset, Pointer).
+	const uint32 AvailableBytes = InRecvBufferPointer - InOutRecvBufferReadOffset;
+	if (HasReceivedEnoughForPacketSerialize(AvailableBytes))
 	{
-		FMemory::Memcpy(this, InOutRecvBuffer, PacketSizeBytes);
+		FMemory::Memcpy(this, InRecvBuffer + InOutRecvBufferReadOffset, PacketSizeBytes);
 
-		InOutRecvBufferPointer -= PacketSizeBytes;
-
-		/*if (InOutRecvBufferPointer > 0)
-		{
-			UE_LOG(LogWendy, Warning, TEXT("Network Checking #1, Accumulated recv %u"), InOutRecvBufferPointer);
-		}*/
-
-		for (int32 RecvBfIdx = 0; RecvBfIdx < static_cast<int32>(InOutRecvBufferPointer); ++RecvBfIdx)
-		{
-			InOutRecvBuffer[RecvBfIdx] = InOutRecvBuffer[RecvBfIdx + PacketSizeBytes];
-		}
+		// Advance the read cursor only; no memory shift here. The caller compacts once per drain.
+		InOutRecvBufferReadOffset += PacketSizeBytes;
 		return true;
 	}
 	/*else
 	{
-		UE_LOG(LogWendy, Warning, TEXT("Network Checking #2, haven't recv enough %u"), InOutRecvBufferPointer);
+		UE_LOG(LogWendy, Warning, TEXT("Network Checking #2, haven't recv enough %u"), AvailableBytes);
 	}*/
 
 	return false;
 }
 
-bool FWendyImageRepPacketBase::SerializeFromRecvBuffer_HeaderOnly(uint8* InRecvBuffer, uint32 InRecvBufferPointer)
+bool FWendyImageRepPacketBase::SerializeFromRecvBuffer_HeaderOnly(uint8* InRecvBuffer, uint32 InRecvBufferReadOffset, uint32 InRecvBufferPointer)
 {
-	if (static_cast<int32>(InRecvBufferPointer) >= GetPacketHeaderSize())
+	const uint32 AvailableBytes = InRecvBufferPointer - InRecvBufferReadOffset;
+	if (static_cast<int32>(AvailableBytes) >= GetPacketHeaderSize())
 	{
-		FMemory::Memcpy(this, InRecvBuffer, GetPacketHeaderSize());
+		FMemory::Memcpy(this, InRecvBuffer + InRecvBufferReadOffset, GetPacketHeaderSize());
 		return true;
 	}
 	return false;
 }
 
-bool FWendyImageRepPacketBase::HasReceivedEnoughForPacketSerialize(uint32 InRecvBufferPointer) const
+bool FWendyImageRepPacketBase::HasReceivedEnoughForPacketSerialize(uint32 InAvailableBytes) const
 {
 	ensureMsgf(static_cast<int32>(PacketSizeBytes) > GetPacketHeaderSize(), TEXT("Are you calling it as base struct?"));
-	return (InRecvBufferPointer >= PacketSizeBytes);
+	return (InAvailableBytes >= PacketSizeBytes);
 }
 
 /////////////////////////////////////////////

@@ -26,7 +26,8 @@ struct FWendyBoundSocketAndRelevantInfo
 
 
 	uint8 RecvBuffer[RECEIVE_SEND_BUFFER_SIZE] = { 0 };
-	uint32 RecvBufferPointer = 0; // This being bigger than zero means there's something received and to be processed
+	uint32 RecvBufferPointer = 0; // Write head: total valid bytes in RecvBuffer. Bigger than zero means there's something received and to be processed.
+	uint32 RecvBufferReadOffset = 0; // Read head into RecvBuffer. Unread region is [RecvBufferReadOffset, RecvBufferPointer). Advanced while draining, compacted back to 0 once per drain.
 	uint8 SendBuffer[RECEIVE_SEND_BUFFER_SIZE] = { 0 };
 	uint32 SendBufferPointer = 0; // This being bigger than zero means there's something to send.
 };
@@ -105,7 +106,7 @@ private:
 
 	/** Just putting repetitive common part together. */
 	static void WrappedSendAction(FWendyImageRepPacketBase* SendPacket, FSocket* InSocket, FInternetAddr& InAddr, uint8* SendBuffer, uint32& SendBufferPointer);
-	bool WrappedRecvAction_ImageData(uint8* RecvBuffer, uint32& RecvBufferPointer);
+	bool WrappedRecvAction_ImageData(uint8* RecvBuffer, uint32& RecvBufferReadOffset, uint32 RecvBufferPointer);
 
 	/** Doing something if Send/RecvStaging data gets too big (by any unexpected reason) */
 	void DisposeTooMuchStagingData();

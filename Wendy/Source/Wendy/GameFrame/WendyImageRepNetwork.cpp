@@ -168,22 +168,27 @@ void FWendyImageRepNetwork::UpdateTickServer(float InDeltaSecond)
 			while (SerializeLoopLimit-- > 0)
 			{
 				FWendyImageRepPacketBase AsBasePacket(EWendyImageRepPacketType::WIRP_END, 0);
-				if (AsBasePacket.SerializeFromRecvBuffer_HeaderOnly(ClientInfo.RecvBuffer, ClientInfo.RecvBufferPointer))
+				if (AsBasePacket.SerializeFromRecvBuffer_HeaderOnly(ClientInfo.RecvBuffer, ClientInfo.RecvBufferReadOffset, ClientInfo.RecvBufferPointer))
 				{
 					if (AsBasePacket.PacketID == EWendyImageRepPacketType::WIRP_USERINFO)
 					{
 						FWendyImageRepPacket_UserInfo UserInfoPacket;
 						// It will be serialized and return true only when received enough for this packet, or recv again and serialize later.
-						if (UserInfoPacket.SerializeFromRecvBuffer(ClientInfo.RecvBuffer, ClientInfo.RecvBufferPointer))
+						if (UserInfoPacket.SerializeFromRecvBuffer(ClientInfo.RecvBuffer, ClientInfo.RecvBufferReadOffset, ClientInfo.RecvBufferPointer))
 						{
 							ClientInfo.UserIdentification = UserInfoPacket.ToUserIdStr();
 
 							UE_LOG(LogWendyImageRepNetwork, Log, TEXT("Received User identification from client %s (%s)"), *ClientInfo.UserIdentification, *ClientInfo.BoundAddr->ToString(false));
 						}
+						else
+						{
+							// Not enough data to serialize anymore until recv again.
+							break;
+						}
 					}
 					else if (AsBasePacket.PacketID == EWendyImageRepPacketType::WIRP_IMAGEDATA)
 					{
-						if (WrappedRecvAction_ImageData(ClientInfo.RecvBuffer, ClientInfo.RecvBufferPointer) == false)
+						if (WrappedRecvAction_ImageData(ClientInfo.RecvBuffer, ClientInfo.RecvBufferReadOffset, ClientInfo.RecvBufferPointer) == false)
 						{
 							// False return means not enough data to serialize anymore until recv again.
 							break;
@@ -196,13 +201,32 @@ void FWendyImageRepNetwork::UpdateTickServer(float InDeltaSecond)
 					else
 					{
 						ensureMsgf(0, TEXT("Well, there's no more packet, or we should think about the way to interpret recv data."));
+						break;
 					}
 				}
+				else
+				{
+					// Not even a full header available yet.
+					break;
+				}
 
-				if (ClientInfo.RecvBufferPointer == 0)
+				if (ClientInfo.RecvBufferReadOffset >= ClientInfo.RecvBufferPointer)
 				{ // No more to serialze.
 					break;
 				}
+			}
+
+			// Compact once per drain: move the unread remainder to the front and reset the cursor.
+			// This replaces the former per-packet byte-by-byte shift (which was O(packets^2)).
+			if (ClientInfo.RecvBufferReadOffset > 0)
+			{
+				const uint32 UnreadBytes = ClientInfo.RecvBufferPointer - ClientInfo.RecvBufferReadOffset;
+				if (UnreadBytes > 0)
+				{
+					FMemory::Memmove(ClientInfo.RecvBuffer, ClientInfo.RecvBuffer + ClientInfo.RecvBufferReadOffset, UnreadBytes);
+				}
+				ClientInfo.RecvBufferPointer = UnreadBytes;
+				ClientInfo.RecvBufferReadOffset = 0;
 			}
 		}
 	}
@@ -312,11 +336,11 @@ void FWendyImageRepNetwork::UpdateTickClient(float InDeltaSecond)
 			while (SerializeLoopLimit-- > 0)
 			{
 				FWendyImageRepPacketBase AsBasePacket(EWendyImageRepPacketType::WIRP_END, 0);
-				if (AsBasePacket.SerializeFromRecvBuffer_HeaderOnly(ConnectionBase.RecvBuffer, ConnectionBase.RecvBufferPointer))
+				if (AsBasePacket.SerializeFromRecvBuffer_HeaderOnly(ConnectionBase.RecvBuffer, ConnectionBase.RecvBufferReadOffset, ConnectionBase.RecvBufferPointer))
 				{
 					if (AsBasePacket.PacketID == EWendyImageRepPacketType::WIRP_IMAGEDATA)
 					{
-						if (WrappedRecvAction_ImageData(ConnectionBase.RecvBuffer, ConnectionBase.RecvBufferPointer) == false)
+						if (WrappedRecvAction_ImageData(ConnectionBase.RecvBuffer, ConnectionBase.RecvBufferReadOffset, ConnectionBase.RecvBufferPointer) == false)
 						{
 							// False return means not enough data to serialize anymore until recv again.
 							break;
@@ -326,7 +350,7 @@ void FWendyImageRepNetwork::UpdateTickClient(float InDeltaSecond)
 					{
 						FWendyImageRepPacket_RemoteInput InputPacket;
 						// It will be serialized and return true only when received enough for this packet, or recv again and serialize later.
-						if (InputPacket.SerializeFromRecvBuffer(ConnectionBase.RecvBuffer, ConnectionBase.RecvBufferPointer))
+						if (InputPacket.SerializeFromRecvBuffer(ConnectionBase.RecvBuffer, ConnectionBase.RecvBufferReadOffset, ConnectionBase.RecvBufferPointer))
 						{
 							FScopeLock Lock(&RemoteInputInfoMutex);
 
@@ -349,12 +373,33 @@ void FWendyImageRepNetwork::UpdateTickClient(float InDeltaSecond)
 					else
 					{
 						ensureMsgf(0, TEXT("Well, there's no more packet, or we should think about the way to interpret recv data."));
+						break;
 					}
 				}
-				if (ConnectionBase.RecvBufferPointer <= 0)
+				else
+				{
+					// Not even a full header available yet.
+					break;
+				}
+
+				if (ConnectionBase.RecvBufferReadOffset >= ConnectionBase.RecvBufferPointer)
 				{ // No more to serialize.
 					break;
 				}
+			}
+
+			// Compact once per recv+drain: move the unread remainder to the front and reset the cursor.
+			// This replaces the former per-packet byte-by-byte shift (which was O(packets^2)), while
+			// keeping the buffer footprint bounded even when the recv loop runs many iterations per tick.
+			if (ConnectionBase.RecvBufferReadOffset > 0)
+			{
+				const uint32 UnreadBytes = ConnectionBase.RecvBufferPointer - ConnectionBase.RecvBufferReadOffset;
+				if (UnreadBytes > 0)
+				{
+					FMemory::Memmove(ConnectionBase.RecvBuffer, ConnectionBase.RecvBuffer + ConnectionBase.RecvBufferReadOffset, UnreadBytes);
+				}
+				ConnectionBase.RecvBufferPointer = UnreadBytes;
+				ConnectionBase.RecvBufferReadOffset = 0;
 			}
 		}
 		else
@@ -363,7 +408,7 @@ void FWendyImageRepNetwork::UpdateTickClient(float InDeltaSecond)
 		}
 	}
 
-	//// To send 
+	//// To send
 	{
 		FScopeLock ImageLock(&ImageDataAccessMutex);
 		ensureMsgf(SendStagingReplicateInfo.Num() <= 1, TEXT("Why client has more than its own data to send? %d"), SendStagingReplicateInfo.Num());
@@ -506,9 +551,11 @@ bool FWendyImageRepNetwork::RawSendAction(FSocket* InSocket, FInternetAddr& InAd
 				UE_LOG(LogWendy, Warning, TEXT("Network Checking #3, Much left for send %u"), SendBufferPointer);
 			}*/
 
-			for (int32 SendBfIdx = 0; SendBfIdx < static_cast<int32>(SendBufferPointer); ++SendBfIdx)
+			// Shift the unsent remainder down. Memmove is correct for the overlapping regions.
+			// (In practice the send buffer rarely holds more than one packet, so this is usually a no-op.)
+			if (SendBufferPointer > 0)
 			{
-				SendBuffer[SendBfIdx] = SendBuffer[SendBfIdx + ActualBytesSent];
+				FMemory::Memmove(SendBuffer, SendBuffer + ActualBytesSent, SendBufferPointer);
 			}
 			return true;
 		}
@@ -548,11 +595,11 @@ void FWendyImageRepNetwork::WrappedSendAction(FWendyImageRepPacketBase* SendPack
 	}
 }
 
-bool FWendyImageRepNetwork::WrappedRecvAction_ImageData(uint8* RecvBuffer, uint32& RecvBufferPointer)
+bool FWendyImageRepNetwork::WrappedRecvAction_ImageData(uint8* RecvBuffer, uint32& RecvBufferReadOffset, uint32 RecvBufferPointer)
 {
 	FWendyImageRepPacket_ImageData ImagePacket;
 	// It will be serialized and return true only when received enough for this packet, or recv again and serialize later.
-	if (ImagePacket.SerializeFromRecvBuffer(RecvBuffer, RecvBufferPointer))
+	if (ImagePacket.SerializeFromRecvBuffer(RecvBuffer, RecvBufferReadOffset, RecvBufferPointer))
 	{		
 		FString ImageOwnerId;
 		FWendyDesktopImageReplicateInfo ImageReplicateInfo;
