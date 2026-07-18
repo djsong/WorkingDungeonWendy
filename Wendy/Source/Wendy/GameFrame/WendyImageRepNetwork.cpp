@@ -256,6 +256,25 @@ void FWendyImageRepNetwork::UpdateTickServer(float InDeltaSecond)
 	////////////////////
 	//// To send 
 		
+#if WD_DECOUPLED_IMAGE_SEND
+	// Snapshot staging under the lock, then do the blocking socket I/O outside it so a
+	// congested client can't stall the game thread's SetSendImageInfo/ConsumeImageInfo (same mutex).
+	// MoveTemp is O(1): the member map is left empty and the game thread refills it for next tick.
+	TMap<FString, TArray<FWendyDesktopImageReplicateInfo>> LocalSendStaging;
+	{
+		FScopeLock ImageLock(&ImageDataAccessMutex);
+		LocalSendStaging = MoveTemp(SendStagingReplicateInfo);
+		SendStagingReplicateInfo.Reset();
+	}
+
+	// Coalesce the snapshot into each client's per-region backlog and feed SendBuffer at its own drain rate.
+	// Each client has an independent backlog + SendBuffer, so a slow client keeps more pending without
+	// stalling a fast one, and no client's SendBuffer is ever over-stuffed (requeue-on-full inside).
+	for (int32 ClientIdx = 0; ClientIdx < ConnectedClients.Num(); ++ClientIdx)
+	{
+		FeedConnectionFromStaging(ConnectedClients[ClientIdx], LocalSendStaging);
+	}
+#else
 	{
 		FScopeLock ImageLock(&ImageDataAccessMutex);
 
@@ -290,6 +309,7 @@ void FWendyImageRepNetwork::UpdateTickServer(float InDeltaSecond)
 			ItStagingRepInfo.Value.Empty();
 		}
 	}
+#endif // WD_DECOUPLED_IMAGE_SEND
 
 	// Input data won't be that frequent like image data, so check its size first.
 	if(SendStagingRemoteInputInfo.Num() > 0)
@@ -409,6 +429,18 @@ void FWendyImageRepNetwork::UpdateTickClient(float InDeltaSecond)
 	}
 
 	//// To send
+#if WD_DECOUPLED_IMAGE_SEND
+	// Snapshot our own staging under the lock, then coalesce + feed outside it (same reasoning as the server block).
+	TMap<FString, TArray<FWendyDesktopImageReplicateInfo>> LocalSendStaging;
+	{
+		FScopeLock ImageLock(&ImageDataAccessMutex);
+		ensureMsgf(SendStagingReplicateInfo.Num() <= 1, TEXT("Why client has more than its own data to send? %d"), SendStagingReplicateInfo.Num());
+		LocalSendStaging = MoveTemp(SendStagingReplicateInfo);
+		SendStagingReplicateInfo.Reset();
+	}
+
+	FeedConnectionFromStaging(ConnectionBase, LocalSendStaging);
+#else
 	{
 		FScopeLock ImageLock(&ImageDataAccessMutex);
 		ensureMsgf(SendStagingReplicateInfo.Num() <= 1, TEXT("Why client has more than its own data to send? %d"), SendStagingReplicateInfo.Num());
@@ -430,6 +462,7 @@ void FWendyImageRepNetwork::UpdateTickClient(float InDeltaSecond)
 			ItStagingRepInfo.Value.Empty();
 		}
 	}
+#endif // WD_DECOUPLED_IMAGE_SEND
 
 	DisposeTooMuchStagingData();
 }
@@ -535,27 +568,30 @@ bool FWendyImageRepNetwork::RawRecvAction(FSocket* InSocket, FInternetAddr& InAd
 
 bool FWendyImageRepNetwork::RawSendAction(FSocket* InSocket, FInternetAddr& InAddr, uint8* SendBuffer, uint32& SendBufferPointer)
 {
-	uint8 RawSendBuffer[MAX_PACKET_SIZE] = { 0 };
-	const uint32 MaxTryToSend = FMath::Min(SendBufferPointer, static_cast<uint32>(MAX_PACKET_SIZE));
-	FMemory::Memcpy(RawSendBuffer, SendBuffer, MaxTryToSend);
+	if (SendBufferPointer == 0)
+	{
+		return false;
+	}
 
+	// TCP is a byte stream, so send as much of the pending buffer as the socket will take in a single call
+	// (no reason to cap at MAX_PACKET_SIZE, and no need to copy through a temp buffer). A partial send just
+	// leaves the remainder to be shifted down and retried; sending big chunks keeps both syscalls and the
+	// remainder-shift cost low instead of draining a large buffer one packet at a time (which was ~O(n^2)).
 	int32 ActualBytesSent = 0;
-	if (InSocket->SendTo(RawSendBuffer, MaxTryToSend, ActualBytesSent, InAddr))
+	if (InSocket->SendTo(SendBuffer, static_cast<int32>(SendBufferPointer), ActualBytesSent, InAddr))
 	{
 		if (ActualBytesSent > 0)
 		{
-			SendBufferPointer = FMath::Max<uint32>(SendBufferPointer - static_cast<uint32>(ActualBytesSent), 0);
-
-			/*if (SendBufferPointer > 0)
-			{
-				UE_LOG(LogWendy, Warning, TEXT("Network Checking #3, Much left for send %u"), SendBufferPointer);
-			}*/
+			// A well-behaved socket never reports more sent than we asked (SendBufferPointer), so this clamp is
+			// normally a no-op. But SendBufferPointer is unsigned, so clamp defensively: without it, a bogus
+			// over-report would underflow SendBufferPointer to a huge value (and drive a wild Memmove).
+			const uint32 BytesSent = FMath::Min(static_cast<uint32>(ActualBytesSent), SendBufferPointer);
+			SendBufferPointer -= BytesSent;
 
 			// Shift the unsent remainder down. Memmove is correct for the overlapping regions.
-			// (In practice the send buffer rarely holds more than one packet, so this is usually a no-op.)
 			if (SendBufferPointer > 0)
 			{
-				FMemory::Memmove(SendBuffer, SendBuffer + ActualBytesSent, SendBufferPointer);
+				FMemory::Memmove(SendBuffer, SendBuffer + BytesSent, SendBufferPointer);
 			}
 			return true;
 		}
@@ -563,7 +599,7 @@ bool FWendyImageRepNetwork::RawSendAction(FSocket* InSocket, FInternetAddr& InAd
 	return false;
 }
 
-void FWendyImageRepNetwork::WrappedSendAction(FWendyImageRepPacketBase* SendPacket, FSocket* InSocket, FInternetAddr& InAddr, uint8* SendBuffer, uint32& SendBufferPointer)
+bool FWendyImageRepNetwork::WrappedSendAction(FWendyImageRepPacketBase* SendPacket, FSocket* InSocket, FInternetAddr& InAddr, uint8* SendBuffer, uint32& SendBufferPointer)
 {
 	if (SendPacket->SerializeToSendBuffer(SendBuffer, SendBufferPointer))
 	{
@@ -587,11 +623,13 @@ void FWendyImageRepNetwork::WrappedSendAction(FWendyImageRepPacketBase* SendPack
 				break;
 			}
 		}
+		return true;
 	}
 	else
 	{
-		// If serialize failed, send staging data will be loss.
+		// Old path / remote-input have no requeue, so a full SendBuffer here means this packet is dropped.
 		UE_LOG(LogWendyImageRepNetwork, Warning, TEXT("SerializeToSendBuffer failed... Does SendBufferPointer overflow? %u"), SendBufferPointer);
+		return false;
 	}
 }
 
@@ -617,6 +655,94 @@ bool FWendyImageRepNetwork::WrappedRecvAction_ImageData(uint8* RecvBuffer, uint3
 		return false;
 	}
 }
+
+#if WD_DECOUPLED_IMAGE_SEND
+void FWendyImageRepNetwork::DrainSendBufferNonBlocking(FSocket* InSocket, FInternetAddr& InAddr, uint8* SendBuffer, uint32& SendBufferPointer)
+{
+	// Keep pushing until the socket won't take any more right now, then return (no sleeping).
+	// RawSendAction sends a big chunk per call, so this converges in a few iterations; the guard is just paranoia.
+	int32 DrainGuard = 4096;
+	while (SendBufferPointer > 0 && DrainGuard-- > 0)
+	{
+		if (!RawSendAction(InSocket, InAddr, SendBuffer, SendBufferPointer))
+		{
+			// Would-block (OS send buffer full) or error: leave the rest for the next tick.
+			break;
+		}
+	}
+}
+
+void FWendyImageRepNetwork::FeedConnectionFromStaging(FWendyBoundSocketAndRelevantInfo& Conn, const TMap<FString, TArray<FWendyDesktopImageReplicateInfo>>& StagingSnapshot)
+{
+	// 1) Coalesce the fresh snapshot into this connection's per-region backlog.
+	//    A newer capture of the same region overwrites the pending-but-unsent older one (newest wins),
+	//    so the backlog can never exceed one frame's worth of regions no matter how far behind the link is.
+	for (const auto& OwnerEntry : StagingSnapshot)
+	{
+		// Don't echo an owner's own image back to itself (matches the original per-client skip).
+		if (OwnerEntry.Key == Conn.UserIdentification)
+		{
+			continue;
+		}
+
+		TMap<int32, FWendyDesktopImageReplicateInfo>& OwnerPending = Conn.PendingSendByOwnerRegion.FindOrAdd(OwnerEntry.Key);
+		for (const FWendyDesktopImageReplicateInfo& Info : OwnerEntry.Value)
+		{
+			OwnerPending.Add(Info.UpdateBeginIndex, Info);
+		}
+	}
+
+	// 2) Drain whatever is already sitting in SendBuffer from previous ticks FIRST.
+	//    This is the key fix: draining must not be gated behind a successful append, otherwise a full
+	//    SendBuffer can never empty (append fails -> we'd never call send -> buffer stays full forever).
+	DrainSendBufferNonBlocking(Conn.SocketPtr, *Conn.BoundAddr.Get(), Conn.SendBuffer, Conn.SendBufferPointer);
+
+	// 3) Fill SendBuffer with as many backlog regions as fit, flushing in BULK only when it's full, so we send
+	//    ~one big socket write per buffer rather than one per ~1KB packet. Ascending region order + removing
+	//    what we queue gives fair coverage (the game-thread producer round-robins regions, so no send cursor
+	//    is needed). If the buffer is still full after a flush, the socket is congested this tick: stop and
+	//    keep the remaining regions pending (requeue, never drop).
+	bool bSocketCongested = false;
+	for (auto& OwnerPendingPair : Conn.PendingSendByOwnerRegion)
+	{
+		const FString& OwnerId = OwnerPendingPair.Key;
+		TMap<int32, FWendyDesktopImageReplicateInfo>& OwnerPending = OwnerPendingPair.Value;
+
+		TArray<int32> Regions;
+		OwnerPending.GetKeys(Regions);
+		Regions.Sort();
+
+		for (int32 Region : Regions)
+		{
+			FWendyImageRepPacket_ImageData ImagePacket;
+			ImagePacket.FromReplicateInfo(OwnerId, OwnerPending[Region]);
+
+			if (!ImagePacket.SerializeToSendBuffer(Conn.SendBuffer, Conn.SendBufferPointer))
+			{
+				// SendBuffer full: flush it in bulk to make room, then try this region once more.
+				DrainSendBufferNonBlocking(Conn.SocketPtr, *Conn.BoundAddr.Get(), Conn.SendBuffer, Conn.SendBufferPointer);
+				if (!ImagePacket.SerializeToSendBuffer(Conn.SendBuffer, Conn.SendBufferPointer))
+				{
+					// Still no room even after flushing: the socket can't keep up this tick.
+					bSocketCongested = true;
+					break;
+				}
+			}
+
+			// Queued into SendBuffer; safe to drop from the backlog now.
+			OwnerPending.Remove(Region);
+		}
+
+		if (bSocketCongested)
+		{
+			break;
+		}
+	}
+
+	// 4) Flush whatever we appended (the last, partially-filled buffer).
+	DrainSendBufferNonBlocking(Conn.SocketPtr, *Conn.BoundAddr.Get(), Conn.SendBuffer, Conn.SendBufferPointer);
+}
+#endif // WD_DECOUPLED_IMAGE_SEND
 
 void FWendyImageRepNetwork::DisposeTooMuchStagingData()
 {
