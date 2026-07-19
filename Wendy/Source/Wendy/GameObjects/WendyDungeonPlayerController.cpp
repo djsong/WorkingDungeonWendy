@@ -137,6 +137,18 @@ bool AWendyDungeonPlayerController::InputKey(const FInputKeyEventArgs& Params)
 	{
 		InputKeyInputKey = EWendyRemoteInputKeys::MRB;
 	}
+	else if (Params.Key == EKeys::MiddleMouseButton)
+	{
+		InputKeyInputKey = EWendyRemoteInputKeys::MMB;
+	}
+	else if (Params.Key == EKeys::MouseScrollUp)
+	{
+		InputKeyInputKey = EWendyRemoteInputKeys::MWheelUp;
+	}
+	else if (Params.Key == EKeys::MouseScrollDown)
+	{
+		InputKeyInputKey = EWendyRemoteInputKeys::MWheelDown;
+	}
 	else
 	{
 		const EWendyRemoteInputKeys FKeyConverted = FromFKeyToWendyRemoteKey(Params.Key);
@@ -230,11 +242,23 @@ void AWendyDungeonPlayerController::SimulateRemoteInput()
 				
 				::SetCursorPos(CursorPos.X, CursorPos.Y);
 
-				if (InputInfo.InputKey == EWendyRemoteInputKeys::MLB || InputInfo.InputKey == EWendyRemoteInputKeys::MRB)
+				if (InputInfo.InputKey == EWendyRemoteInputKeys::MLB || InputInfo.InputKey == EWendyRemoteInputKeys::MRB || InputInfo.InputKey == EWendyRemoteInputKeys::MMB)
 				{
 					IConsoleVariable* StopProcessingWmSysCommandCVarPtr = IConsoleManager::Get().FindConsoleVariable(TEXT("w.StopProcessingWmSysCommand"));
 					
-					const bool bConsideredMLB = (InputInfo.InputKey == EWendyRemoteInputKeys::MLB);
+					// Pick the down/up flags for whichever mouse button this is.
+					DWORD MouseDownFlag = MOUSEEVENTF_LEFTDOWN;
+					DWORD MouseUpFlag = MOUSEEVENTF_LEFTUP;
+					if (InputInfo.InputKey == EWendyRemoteInputKeys::MRB)
+					{
+						MouseDownFlag = MOUSEEVENTF_RIGHTDOWN;
+						MouseUpFlag = MOUSEEVENTF_RIGHTUP;
+					}
+					else if (InputInfo.InputKey == EWendyRemoteInputKeys::MMB)
+					{
+						MouseDownFlag = MOUSEEVENTF_MIDDLEDOWN;
+						MouseUpFlag = MOUSEEVENTF_MIDDLEUP;
+					}
 
 					if (InputInfo.InputEvent == EWendyRemoteInputEvents::Pressed)
 					{
@@ -248,7 +272,7 @@ void AWendyDungeonPlayerController::SimulateRemoteInput()
 						INPUT input = {};
 
 						input.type = INPUT_MOUSE;
-						input.mi.dwFlags = bConsideredMLB  ? MOUSEEVENTF_LEFTDOWN : MOUSEEVENTF_RIGHTDOWN;
+						input.mi.dwFlags = MouseDownFlag;
 												
 						// If it doesn't work well for clicking event, we can send 2 inputs at the same time to simulate clicking event precisely.
 						::SendInput(1, &input, sizeof(INPUT));
@@ -265,14 +289,25 @@ void AWendyDungeonPlayerController::SimulateRemoteInput()
 						INPUT inputs[2] = {};
 
 						inputs[0].type = INPUT_MOUSE;
-						inputs[0].mi.dwFlags = bConsideredMLB ? MOUSEEVENTF_LEFTDOWN : MOUSEEVENTF_RIGHTDOWN;
+						inputs[0].mi.dwFlags = MouseDownFlag;
 
 						inputs[1].type = INPUT_MOUSE;
-						inputs[1].mi.dwFlags = bConsideredMLB ? MOUSEEVENTF_LEFTUP : MOUSEEVENTF_RIGHTUP;
+						inputs[1].mi.dwFlags = MouseUpFlag;
 
 						// If it doesn't work well for clicking event, we can send 2 inputs at the same time to simulate clicking event precisely.
 						::SendInput(2, inputs, sizeof(INPUT));
 					}
+				}
+				else if (InputInfo.InputKey == EWendyRemoteInputKeys::MWheelUp || InputInfo.InputKey == EWendyRemoteInputKeys::MWheelDown)
+				{
+					// Discrete wheel notch: emit one WHEEL event per captured scroll; direction comes from the key.
+					INPUT input = {};
+					input.type = INPUT_MOUSE;
+					input.mi.dwFlags = MOUSEEVENTF_WHEEL;
+					input.mi.mouseData = (InputInfo.InputKey == EWendyRemoteInputKeys::MWheelUp)
+						? static_cast<DWORD>(WHEEL_DELTA)
+						: static_cast<DWORD>(-WHEEL_DELTA);
+					::SendInput(1, &input, sizeof(INPUT));
 				}
 				else // Keyborad input
 				{

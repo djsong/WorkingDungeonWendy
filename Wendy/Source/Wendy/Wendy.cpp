@@ -94,6 +94,26 @@ EWendyRemoteInputKeys FromFKeyToWendyRemoteKey(const FKey InFKey)
 	{
 		return EWendyRemoteInputKeys::Key_Period;
 	}
+	else if (InFKey == EKeys::Semicolon)
+	{
+		return EWendyRemoteInputKeys::Key_Semicolon;
+	}
+	else if (InFKey == EKeys::Apostrophe)
+	{
+		return EWendyRemoteInputKeys::Key_Apostrophe;
+	}
+	else if (InFKey == EKeys::LeftBracket)
+	{
+		return EWendyRemoteInputKeys::Key_LeftBracket;
+	}
+	else if (InFKey == EKeys::RightBracket)
+	{
+		return EWendyRemoteInputKeys::Key_RightBracket;
+	}
+	else if (InFKey == EKeys::Hyphen)
+	{
+		return EWendyRemoteInputKeys::Key_Hyphen;
+	}
 	else if (InFKey == EKeys::Zero)
 	{
 		return EWendyRemoteInputKeys::Key_Zero;
@@ -330,6 +350,16 @@ uint8 FromWendyRemoteKeyToWinVK(EWendyRemoteInputKeys InRemoteInputKey)
 		return VK_OEM_COMMA;
 	case EWendyRemoteInputKeys::Key_Period:
 		return VK_OEM_PERIOD;
+	case EWendyRemoteInputKeys::Key_Semicolon:
+		return VK_OEM_1;
+	case EWendyRemoteInputKeys::Key_Apostrophe:
+		return VK_OEM_7;
+	case EWendyRemoteInputKeys::Key_LeftBracket:
+		return VK_OEM_4;
+	case EWendyRemoteInputKeys::Key_RightBracket:
+		return VK_OEM_6;
+	case EWendyRemoteInputKeys::Key_Hyphen:
+		return VK_OEM_MINUS;
 	case EWendyRemoteInputKeys::Key_Zero:
 		return '0';
 	case EWendyRemoteInputKeys::Key_One:

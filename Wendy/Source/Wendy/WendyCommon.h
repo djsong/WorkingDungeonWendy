@@ -130,6 +130,10 @@ enum class EWendyRemoteInputKeys : uint8
 
 	MLB,
 	MRB,
+	MMB,
+
+	MWheelUp,
+	MWheelDown,
 
 	Key_BackSpace,
 	Key_Tab,
@@ -149,6 +153,11 @@ enum class EWendyRemoteInputKeys : uint8
 	Key_Equals,
 	Key_Comma,
 	Key_Period,
+	Key_Semicolon,
+	Key_Apostrophe,
+	Key_LeftBracket,
+	Key_RightBracket,
+	Key_Hyphen,
 
 	Key_Zero,
 	Key_One,
