@@ -306,6 +306,30 @@ EWendyRemoteInputKeys FromFKeyToWendyRemoteKey(const FKey InFKey)
 	{
 		return EWendyRemoteInputKeys::Key_Z;
 	}
+	else if (InFKey == EKeys::LeftShift)
+	{
+		return EWendyRemoteInputKeys::Key_LShift;
+	}
+	else if (InFKey == EKeys::RightShift)
+	{
+		return EWendyRemoteInputKeys::Key_RShift;
+	}
+	else if (InFKey == EKeys::LeftControl)
+	{
+		return EWendyRemoteInputKeys::Key_LControl;
+	}
+	else if (InFKey == EKeys::RightControl)
+	{
+		return EWendyRemoteInputKeys::Key_RControl;
+	}
+	else if (InFKey == EKeys::LeftAlt)
+	{
+		return EWendyRemoteInputKeys::Key_LAlt;
+	}
+	else if (InFKey == EKeys::RightAlt)
+	{
+		return EWendyRemoteInputKeys::Key_RAlt;
+	}
 
 	return EWendyRemoteInputKeys::None;
 }
@@ -456,6 +480,18 @@ uint8 FromWendyRemoteKeyToWinVK(EWendyRemoteInputKeys InRemoteInputKey)
 		return 'Y';
 	case EWendyRemoteInputKeys::Key_Z:
 		return 'Z';
+	case EWendyRemoteInputKeys::Key_LShift:
+		return VK_LSHIFT;
+	case EWendyRemoteInputKeys::Key_RShift:
+		return VK_RSHIFT;
+	case EWendyRemoteInputKeys::Key_LControl:
+		return VK_LCONTROL;
+	case EWendyRemoteInputKeys::Key_RControl:
+		return VK_RCONTROL;
+	case EWendyRemoteInputKeys::Key_LAlt:
+		return VK_LMENU;
+	case EWendyRemoteInputKeys::Key_RAlt:
+		return VK_RMENU;
 	}
 #endif
 

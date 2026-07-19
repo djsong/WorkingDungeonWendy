@@ -48,9 +48,13 @@ private:
 
 	/** To be valid only when monitor mesh is under mouse cursor in focusing mode. */
 	FWendyMonitorHitAndInputInfo FocusingModeMonitorHitInputInfo;
-	/** FWendyMonitorHitAndInputInfo also has this member, but extra variable is needed for tracking between frame to frame. */
-	EWendyRemoteInputKeys InputKeyInputKey = EWendyRemoteInputKeys::None;
-	EWendyRemoteInputEvents InputKeyInputEvent = EWendyRemoteInputEvents::None;
+	/** All key/mouse events captured during the current tick, in order, each sent as its own remote-input info.
+	 * Replaces the old single-key/tick field so concurrent keys (modifier + key) and true press/release work. */
+	TArray<FWendyRemoteInputKeyEvent> PendingRemoteInputKeyEvents;
+	/** Keys we've sent a Pressed for but not yet a Released. Used to auto-release them on leaving focus mode,
+	 * so a missed release can't leave a key (especially a modifier) stuck DOWN on the remote machine.
+	 * A small TArray (only a few keys are ever held at once) — avoids needing GetTypeHash for the enum. */
+	TArray<EWendyRemoteInputKeys> HeldRemoteInputKeys;
 
 	/** Static cam that focuses on a selected seat in near distance */
 	void TryEnterFocusMode();

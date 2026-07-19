@@ -135,6 +135,13 @@ enum class EWendyRemoteInputKeys : uint8
 	MWheelUp,
 	MWheelDown,
 
+	Key_LShift,
+	Key_RShift,
+	Key_LControl,
+	Key_RControl,
+	Key_LAlt,
+	Key_RAlt,
+
 	Key_BackSpace,
 	Key_Tab,
 	Key_Enter,
@@ -232,6 +239,14 @@ enum class EWendyRemoteInputEvents : uint8
 	Released,
 
 	End
+};
+
+/** A single captured remote key/mouse event. Several can be produced per tick so concurrent keys
+ * (e.g. modifier + key) and true press/release are preserved instead of collapsing into one tap. */
+struct FWendyRemoteInputKeyEvent
+{
+	EWendyRemoteInputKeys Key = EWendyRemoteInputKeys::None;
+	EWendyRemoteInputEvents Event = EWendyRemoteInputEvents::None;
 };
 
 /** For monitor input tracking and faking. */

@@ -67,42 +67,40 @@ void AWendyDungeonPlayerController::PlayerTick(float DeltaTime)
 	}
 
 
-	// Pick up input event from InputKey here
+	// Send the input captured this tick. Each queued key event goes out as its own remote-input info (in order),
+	// so concurrent keys and true press/release survive. With no key this tick we still send a "no key" info so
+	// the remote cursor keeps following the hover.
 	if (IsInFocusingMode())
 	{
-		if (InputKeyInputEvent == EWendyRemoteInputEvents::Pressed || InputKeyInputEvent == EWendyRemoteInputEvents::Released)
-		{
-			FocusingModeMonitorHitInputInfo.InputEvent = InputKeyInputEvent;
-			FocusingModeMonitorHitInputInfo.InputKey = InputKeyInputKey;
-		}
-		else
-		{
-			// Not sending else.. probably yet?
-			FocusingModeMonitorHitInputInfo.InputKey = EWendyRemoteInputKeys::None;
-			FocusingModeMonitorHitInputInfo.InputEvent = EWendyRemoteInputEvents::None;
-		}
-		
-		// As FocusingModeMonitorHitInputInfo.InputEvent will last until next PlayerTick this can be at any other place,
-		// but why not here?
 		UWendyGameInstance* WdGameInst = Cast<UWendyGameInstance>(UGameplayStatics::GetGameInstance(this));
 		if (IsValid(WdGameInst))
 		{
-			//if (FocusingModeMonitorHitInputInfo.HasValidInfo()) <- Should better?
+			if (PendingRemoteInputKeyEvents.Num() > 0)
 			{
+				for (const FWendyRemoteInputKeyEvent& KeyEvent : PendingRemoteInputKeyEvents)
+				{
+					FocusingModeMonitorHitInputInfo.InputKey = KeyEvent.Key;
+					FocusingModeMonitorHitInputInfo.InputEvent = KeyEvent.Event;
+					WdGameInst->SetRemoteInputInfo(FocusingModeMonitorHitInputInfo);
+				}
+			}
+			else
+			{
+				FocusingModeMonitorHitInputInfo.InputKey = EWendyRemoteInputKeys::None;
+				FocusingModeMonitorHitInputInfo.InputEvent = EWendyRemoteInputEvents::None;
 				WdGameInst->SetRemoteInputInfo(FocusingModeMonitorHitInputInfo);
 			}
 		}
 	}
 	else
-	{ 
+	{
 		// Reseting none here is not probably needed, but it is like double check.
 		FocusingModeMonitorHitInputInfo.InputKey = EWendyRemoteInputKeys::None;
 		FocusingModeMonitorHitInputInfo.InputEvent = EWendyRemoteInputEvents::None;
 	}
 
-	// Should reset after copy the value as InputKey is not being called only when there is an input.
-	InputKeyInputKey = EWendyRemoteInputKeys::None;
-	InputKeyInputEvent = EWendyRemoteInputEvents::None;
+	// This tick's events have been sent; clear the queue for the next tick.
+	PendingRemoteInputKeyEvents.Reset();
 
 
 	// What if SimulateRemoteInput invokes InputKey? It can try send input that has been made remote and endless cycle. Better prevent conflict..
@@ -114,18 +112,20 @@ bool AWendyDungeonPlayerController::InputKey(const FInputKeyEventArgs& Params)
 	// Might refer to ClickEventKeys and UPrimitiveComponent::DispatchOnClicked
 	// but I want to put things here.
 
+	EWendyRemoteInputEvents CapturedEvent = EWendyRemoteInputEvents::None;
 	if (Params.Event == EInputEvent::IE_Pressed)
 	{
-		InputKeyInputEvent = EWendyRemoteInputEvents::Pressed;
+		CapturedEvent = EWendyRemoteInputEvents::Pressed;
 	}
 	else if (Params.Event == EInputEvent::IE_Released)
 	{
-		InputKeyInputEvent = EWendyRemoteInputEvents::Released;
+		CapturedEvent = EWendyRemoteInputEvents::Released;
 	}
 
+	EWendyRemoteInputKeys CapturedKey = EWendyRemoteInputKeys::None;
 	if (Params.Key == EKeys::LeftMouseButton)
 	{
-		InputKeyInputKey = EWendyRemoteInputKeys::MLB;
+		CapturedKey = EWendyRemoteInputKeys::MLB;
 
 		// Too much misclick if entering focus mode on mouse left button.
 		/*if (Params.Event == EInputEvent::IE_Released)
@@ -135,31 +135,47 @@ bool AWendyDungeonPlayerController::InputKey(const FInputKeyEventArgs& Params)
 	}
 	else if (Params.Key == EKeys::RightMouseButton)
 	{
-		InputKeyInputKey = EWendyRemoteInputKeys::MRB;
+		CapturedKey = EWendyRemoteInputKeys::MRB;
 	}
 	else if (Params.Key == EKeys::MiddleMouseButton)
 	{
-		InputKeyInputKey = EWendyRemoteInputKeys::MMB;
+		CapturedKey = EWendyRemoteInputKeys::MMB;
 	}
 	else if (Params.Key == EKeys::MouseScrollUp)
 	{
-		InputKeyInputKey = EWendyRemoteInputKeys::MWheelUp;
+		CapturedKey = EWendyRemoteInputKeys::MWheelUp;
 	}
 	else if (Params.Key == EKeys::MouseScrollDown)
 	{
-		InputKeyInputKey = EWendyRemoteInputKeys::MWheelDown;
+		CapturedKey = EWendyRemoteInputKeys::MWheelDown;
 	}
 	else
 	{
-		const EWendyRemoteInputKeys FKeyConverted = FromFKeyToWendyRemoteKey(Params.Key);
-		if (FKeyConverted != EWendyRemoteInputKeys::None)
-		{
-			InputKeyInputKey = FKeyConverted;
-		}
+		CapturedKey = FromFKeyToWendyRemoteKey(Params.Key);
 
 		if (Params.Key == EKeys::F && Params.Event == EInputEvent::IE_Released)
 		{
 			TryEnterFocusMode();
+		}
+	}
+
+	// Queue this event (in order) for PlayerTick to send. Unlike the old single-field model, multiple events per
+	// tick are kept, so concurrent keys (e.g. modifier + key) and true press/release are both preserved.
+	if (CapturedKey != EWendyRemoteInputKeys::None && CapturedEvent != EWendyRemoteInputEvents::None)
+	{
+		PendingRemoteInputKeyEvents.Add(FWendyRemoteInputKeyEvent{ CapturedKey, CapturedEvent });
+
+		// Track held keys for the leave-focus safeguard. Wheel notches are momentary, so don't track them.
+		if (CapturedKey != EWendyRemoteInputKeys::MWheelUp && CapturedKey != EWendyRemoteInputKeys::MWheelDown)
+		{
+			if (CapturedEvent == EWendyRemoteInputEvents::Pressed)
+			{
+				HeldRemoteInputKeys.AddUnique(CapturedKey);
+			}
+			else if (CapturedEvent == EWendyRemoteInputEvents::Released)
+			{
+				HeldRemoteInputKeys.Remove(CapturedKey);
+			}
 		}
 	}
 
@@ -286,16 +302,11 @@ void AWendyDungeonPlayerController::SimulateRemoteInput()
 							StopProcessingWmSysCommandCVarPtr->SetWithCurrentPriority(0);
 						}
 
-						INPUT inputs[2] = {};
-
-						inputs[0].type = INPUT_MOUSE;
-						inputs[0].mi.dwFlags = MouseDownFlag;
-
-						inputs[1].type = INPUT_MOUSE;
-						inputs[1].mi.dwFlags = MouseUpFlag;
-
-						// If it doesn't work well for clicking event, we can send 2 inputs at the same time to simulate clicking event precisely.
-						::SendInput(2, inputs, sizeof(INPUT));
+						// Release only (no fused down) so click-and-drag works: the button stays down between press and release.
+						INPUT input = {};
+						input.type = INPUT_MOUSE;
+						input.mi.dwFlags = MouseUpFlag;
+						::SendInput(1, &input, sizeof(INPUT));
 					}
 				}
 				else if (InputInfo.InputKey == EWendyRemoteInputKeys::MWheelUp || InputInfo.InputKey == EWendyRemoteInputKeys::MWheelDown)
@@ -311,25 +322,29 @@ void AWendyDungeonPlayerController::SimulateRemoteInput()
 				}
 				else // Keyborad input
 				{
-					// Like mouse input, simulating press and release altogether for stability
-					if (InputInfo.InputEvent == EWendyRemoteInputEvents::Released)
+					// True press/release: down on Pressed, up on Released. This is what makes held modifiers,
+					// key-repeat, and shortcuts (e.g. Ctrl+C) work instead of collapsing into a single tap.
+					const uint8 VKConverted = FromWendyRemoteKeyToWinVK(InputInfo.InputKey);
+					if (VKConverted != 0
+						&& (InputInfo.InputEvent == EWendyRemoteInputEvents::Pressed || InputInfo.InputEvent == EWendyRemoteInputEvents::Released))
 					{
-						const uint8 VKConverted = FromWendyRemoteKeyToWinVK(InputInfo.InputKey);
-						if (VKConverted != 0)
+						INPUT input = {};
+						input.type = INPUT_KEYBOARD;
+						input.ki.wVk = VKConverted;
+
+						DWORD KeyFlags = 0;
+						// Right Ctrl/Alt share their base scancode with the left ones; the extended bit marks them as right-side.
+						if (InputInfo.InputKey == EWendyRemoteInputKeys::Key_RControl || InputInfo.InputKey == EWendyRemoteInputKeys::Key_RAlt)
 						{
-							INPUT inputs[2] = {};
-
-							// Key down
-							inputs[0].type = INPUT_KEYBOARD;
-							inputs[0].ki.wVk = VKConverted;
-							// Key up
-							inputs[1].type = INPUT_KEYBOARD;
-							inputs[1].ki.wVk = VKConverted;
-							inputs[1].ki.dwFlags = KEYEVENTF_KEYUP;
-
-							// Send both inputs (press and release)
-							::SendInput(2, inputs, sizeof(INPUT));
+							KeyFlags |= KEYEVENTF_EXTENDEDKEY;
 						}
+						if (InputInfo.InputEvent == EWendyRemoteInputEvents::Released)
+						{
+							KeyFlags |= KEYEVENTF_KEYUP;
+						}
+						input.ki.dwFlags = KeyFlags;
+
+						::SendInput(1, &input, sizeof(INPUT));
 					}
 				}
 			}
@@ -481,6 +496,24 @@ void AWendyDungeonPlayerController::TryEnterFocusMode()
 
 void AWendyDungeonPlayerController::LeaveFocusMode()
 {
+	// Release any keys still held down on the remote so a missed release can't leave them stuck (especially modifiers).
+	// Do this while still in focus mode so FocusingModeMonitorHitInputInfo still carries the last valid hover UV
+	// (the apply side gates on a valid UV). Then clear the held set.
+	if (HeldRemoteInputKeys.Num() > 0)
+	{
+		UWendyGameInstance* WdGameInst = Cast<UWendyGameInstance>(UGameplayStatics::GetGameInstance(this));
+		if (IsValid(WdGameInst))
+		{
+			for (const EWendyRemoteInputKeys HeldKey : HeldRemoteInputKeys)
+			{
+				FocusingModeMonitorHitInputInfo.InputKey = HeldKey;
+				FocusingModeMonitorHitInputInfo.InputEvent = EWendyRemoteInputEvents::Released;
+				WdGameInst->SetRemoteInputInfo(FocusingModeMonitorHitInputInfo);
+			}
+		}
+		HeldRemoteInputKeys.Reset();
+	}
+
 	// Is it better to iterate all and call SetFocused(false)? not probably because SetFocused call invokes view target change.
 	AWendyDungeonSeat* FocusingSeat = GetCurrFocusingSeat();
 	if (IsValid(FocusingSeat))
