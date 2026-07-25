@@ -112,6 +112,8 @@ struct FWendyImageRepPacket_RemoteInput : public FWendyImageRepPacketBase
 		, MonitorHitUV(-1.0f, -1.0f)
 		, InputKey(EWendyRemoteInputKeys::None)
 		, InputEvent(EWendyRemoteInputEvents::None)
+		, bRelativeMouseMove(false)
+		, MouseDelta(0.0f, 0.0f)
 	{
 		FMemory::Memset(TargetUserId, 0);
 	}
@@ -120,6 +122,9 @@ struct FWendyImageRepPacket_RemoteInput : public FWendyImageRepPacketBase
 	FVector2D MonitorHitUV;
 	EWendyRemoteInputKeys InputKey = EWendyRemoteInputKeys::None;
 	EWendyRemoteInputEvents InputEvent;
+	/** See FWendyMonitorHitAndInputInfo: suppresses absolute cursor placement on the receiving side. */
+	bool bRelativeMouseMove;
+	FVector2D MouseDelta;
 
 
 	uint32 CalculatePacketSizeBytes() const;

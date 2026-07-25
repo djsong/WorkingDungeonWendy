@@ -52,6 +52,15 @@ public:
 
 protected:
 
+	/** True while this local player is remote-controlling someone's desktop (focus mode), where keystrokes
+	 * belong to the remote machine. Movement and look are suppressed via the controller's
+	 * SetIgnoreMoveInput/SetIgnoreLookInput, but bindings that don't consult those flags (Jump, camera zoom)
+	 * have to check this themselves. */
+	bool IsLocalGameplayInputSuppressed() const;
+
+	/** Suppressed in focus mode: ACharacter::Jump doesn't consult IsMoveInputIgnored. */
+	virtual void Jump() override;
+
 	/** Resets HMD orientation in VR. */
 	void OnResetVR();
 

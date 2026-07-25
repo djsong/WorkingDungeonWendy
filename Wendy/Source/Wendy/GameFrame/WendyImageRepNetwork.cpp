@@ -522,9 +522,12 @@ void FWendyImageRepNetwork::SetRemoteInputInfo(const FWendyMonitorHitAndInputInf
 		const bool HasSignificantEvent = (InInfo.InputEvent != EWendyRemoteInputEvents::None);
 		const bool bEnoughTimeHasPassed = (CurrTime - LastTimeRemoteInputStagingForSend >= CVarWdImageRepNetworkCursorMoveSendInterval.GetValueOnAnyThread());
 		const bool bMonitorHitUVChanged = (!FMath::IsNearlyEqual(InInfo.MonitorHitUV.X, LastTimeRemoteInputStagingUV.X) || !FMath::IsNearlyEqual(InInfo.MonitorHitUV.Y, LastTimeRemoteInputStagingUV.Y));
+		// Relative drag movement must never be throttled: each delta is movement that happened, so a dropped
+		// one is lost outright (unlike an absolute position, where the next update self-corrects).
+		const bool bIsRelativeMouseMove = InInfo.bRelativeMouseMove;
 
 		// Specific input event will be sent everytime, but there's interval for simple cursor movement.
-		if (HasSignificantEvent || (bEnoughTimeHasPassed && bMonitorHitUVChanged))
+		if (HasSignificantEvent || bIsRelativeMouseMove || (bEnoughTimeHasPassed && bMonitorHitUVChanged))
 		{
 			FScopeLock Lock(&RemoteInputInfoMutex);
 			SendStagingRemoteInputInfo.Add(InInfo);

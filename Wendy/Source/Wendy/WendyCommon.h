@@ -247,6 +247,9 @@ struct FWendyRemoteInputKeyEvent
 {
 	EWendyRemoteInputKeys Key = EWendyRemoteInputKeys::None;
 	EWendyRemoteInputEvents Event = EWendyRemoteInputEvents::None;
+	/** True when captured during a relative-mouse drag. The apply side must not reposition the cursor
+	 * absolutely for such an event, or a drag would get yanked back to where it started. */
+	bool bRelativeMouse = false;
 };
 
 /** For monitor input tracking and faking. */
@@ -256,6 +259,15 @@ struct FWendyMonitorHitAndInputInfo
 	FVector2D MonitorHitUV = FVector2D(-1.0f, -1.0f);
 	EWendyRemoteInputKeys InputKey = EWendyRemoteInputKeys::None;
 	EWendyRemoteInputEvents InputEvent = EWendyRemoteInputEvents::None;
+
+	/** When true this info belongs to a relative-mouse drag: the receiver must NOT reposition the cursor to
+	 * MonitorHitUV (that would yank the drag back to its start), and applies MouseDelta as raw relative
+	 * motion instead. This is what capture-based UIs (e.g. an Unreal editor viewport doing fly/orbit
+	 * navigation) actually read, since they hide the cursor and consume deltas rather than positions. */
+	bool bRelativeMouseMove = false;
+	/** Raw movement delta in remote pixels. Only meaningful while bRelativeMouseMove is true; may be zero
+	 * for a key/button event that merely needs absolute repositioning suppressed. */
+	FVector2D MouseDelta = FVector2D::ZeroVector;
 
 	FORCEINLINE bool HasValidInfo() const {
 		return TargetUserId.Len() > 0 &&

@@ -17,6 +17,7 @@
 #include "Wendy.h"
 #include "WendyDataStore.h"
 #include "WendyDesktopImageComponent.h"
+#include "WendyDungeonPlayerController.h"
 #include "WendyDungeonSeat.h"
 #include "WendyUINameTag.h"
 #include "WendyImageRepNetwork.h"
@@ -217,6 +218,28 @@ void AWendyCharacter::TouchStarted(ETouchIndex::Type FingerIndex, FVector Locati
 void AWendyCharacter::TouchStopped(ETouchIndex::Type FingerIndex, FVector Location)
 {
 	StopJumping();
+}
+
+bool AWendyCharacter::IsLocalGameplayInputSuppressed() const
+{
+	if (false == IsLocallyControlled())
+	{
+		return false;
+	}
+
+	const AWendyDungeonPlayerController* WdPlayerController = Cast<AWendyDungeonPlayerController>(GetController());
+	return (WdPlayerController != nullptr && WdPlayerController->IsInFocusingMode());
+}
+
+void AWendyCharacter::Jump()
+{
+	// In focus mode the space bar belongs to the remote machine, not to our character.
+	if (IsLocalGameplayInputSuppressed())
+	{
+		return;
+	}
+
+	Super::Jump();
 }
 
 void AWendyCharacter::TurnAtRate(float Rate)
@@ -668,7 +691,8 @@ bool AWendyCharacter::ShouldFinallyReplicateCaptauredImage() const
 
 void AWendyCharacter::ZoomCameraView(float InAmount)
 {
-	if (InAmount != 0.f && IsLocallyControlled())
+	// In focus mode the wheel is being forwarded to the remote desktop, so don't also zoom our own camera.
+	if (InAmount != 0.f && IsLocallyControlled() && false == IsLocalGameplayInputSuppressed())
 	{
 		if (CameraBoom != nullptr)
 		{

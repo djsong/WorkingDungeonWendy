@@ -119,6 +119,8 @@ void FWendyImageRepPacket_RemoteInput::FromHitAndInputInfo(const FWendyMonitorHi
 	this->MonitorHitUV = InInfo.MonitorHitUV;
 	this->InputKey = InInfo.InputKey;
 	this->InputEvent = InInfo.InputEvent;
+	this->bRelativeMouseMove = InInfo.bRelativeMouseMove;
+	this->MouseDelta = InInfo.MouseDelta;
 }
 void FWendyImageRepPacket_RemoteInput::ToHitAndInputInfo(FWendyMonitorHitAndInputInfo& OutInfo)
 {
@@ -126,4 +128,6 @@ void FWendyImageRepPacket_RemoteInput::ToHitAndInputInfo(FWendyMonitorHitAndInpu
 	OutInfo.MonitorHitUV = this->MonitorHitUV;
 	OutInfo.InputKey = this->InputKey;
 	OutInfo.InputEvent = this->InputEvent;
+	OutInfo.bRelativeMouseMove = this->bRelativeMouseMove;
+	OutInfo.MouseDelta = this->MouseDelta;
 }

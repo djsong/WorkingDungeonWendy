@@ -56,6 +56,30 @@ private:
 	 * A small TArray (only a few keys are ever held at once) — avoids needing GetTypeHash for the enum. */
 	TArray<EWendyRemoteInputKeys> HeldRemoteInputKeys;
 
+	/** Relative-mouse (drag) mode, entered once a held mouse button moves past the drag threshold in focus
+	 * mode. Absolute cursor positions stop being sent and raw movement deltas go instead, which is the only
+	 * thing capture-based UIs (e.g. an Unreal editor viewport doing fly/orbit navigation) can navigate with.
+	 * The cursor stays VISIBLE throughout: the streamed desktop refreshes only a couple of times a second,
+	 * so the local cursor is the user's only real-time feedback and hiding it makes a drag unsteerable. */
+	bool bInRelativeMouseMode = false;
+	/** Viewport centre, used as the target of the edge-guard warp. */
+	FVector2D RelativeMouseAnchorPos = FVector2D::ZeroVector;
+	/** Previous tick's cursor position; deltas are measured frame to frame against it. */
+	FVector2D LastRelativeSamplePos = FVector2D::ZeroVector;
+	/** Where the current mouse-button hold started. Relative mode only kicks in once the cursor has moved
+	 * further than the drag threshold from here, so a plain click never turns into a drag. */
+	FVector2D MouseHeldStartPos = FVector2D::ZeroVector;
+	/** Movement sampled this tick while dragging, consumed by PlayerTick. */
+	FVector2D PendingRelativeMouseDelta = FVector2D::ZeroVector;
+
+	void EnterRelativeMouseMode();
+	void ExitRelativeMouseMode();
+	/** Per-tick check that promotes a held mouse button to a real drag once it moves past the threshold. */
+	void UpdateRelativeMouseModeTransition();
+	/** Samples this tick's movement and warps the cursor back to the anchor. Relative mode only. */
+	void UpdateRelativeMouseDelta();
+	bool HasAnyRemoteMouseButtonHeld() const;
+
 	/** Static cam that focuses on a selected seat in near distance */
 	void TryEnterFocusMode();
 	void LeaveFocusMode();
