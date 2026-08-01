@@ -17,6 +17,12 @@ static TAutoConsoleVariable<int32> CVarWdAllowServerSelection(
 
 const FString GetFallbackServerIpString()
 {
+	FString CmdLineAddr;
+	if (FParse::Value(FCommandLine::Get(), TEXT("ServerAddr="), CmdLineAddr))
+	{
+		return CmdLineAddr;
+	}
+
 	const UWendyGameSettings* WdGameSettings = GetDefault<UWendyGameSettings>(UWendyGameSettings::StaticClass());
 	if (WdGameSettings != nullptr && WdGameSettings->DefaultServerIpAddress.Len() > 0)
 	{
@@ -124,7 +130,9 @@ void UWendyLobbyUI::OnUserIdTyped(const FText& InText)
 void UWendyLobbyUI::UpdateIamServerEnableState()
 {
 	// Command line argument is also possible.
-	const bool bShouldEnable = (CVarWdAllowServerSelection.GetValueOnAnyThread() > 0) || FParse::Param(FCommandLine::Get(), TEXT("AllowServerSelection"));
+	const bool bShouldEnable = (CVarWdAllowServerSelection.GetValueOnAnyThread() > 0) || 
+		FParse::Param(FCommandLine::Get(), TEXT("AllowServerSelection")) ||
+		FParse::Param(FCommandLine::Get(), TEXT("AllowServer"));
 	if (CB_IamServer != nullptr)
 	{
 		CB_IamServer->SetIsEnabled(bShouldEnable);
