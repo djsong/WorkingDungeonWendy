@@ -4,6 +4,7 @@
 
 #include "Engine/GameInstance.h"
 #include "WendyImageRepNetwork.h"
+#include "WendyVoiceChat.h"
 #include "WendyCommon.h"
 #include "WendyGameInstance.generated.h"
 
@@ -18,6 +19,9 @@ class UWendyGameInstance : public UGameInstance
 	TUniquePtr<FWendyImageRepNetworkThreadWorker> ImageRepNetworkThreadWorker = nullptr;
 	FRunnableThread* ImageRepNetworkThread = nullptr;
 
+	TUniquePtr<FWendyVoiceChatThreadWorker> VoiceChatThreadWorker = nullptr;
+	FRunnableThread* VoiceChatThread = nullptr;
+
 	/** Being set while InitImageRepNetwork */
 	bool bIsServer = false;
 
@@ -30,6 +34,18 @@ public:
 	 * @param InConnectIpAddrIfClient : Ignored if server */
 	void InitImageRepNetwork(const FWendyWorldConnectingInfo& InConnectingInfo);
 	void TermImageRepNetwork();
+
+	////////////////////////////////////////////////////////////////////////
+	// For VoiceChat
+
+	/** Init called from outside alongside InitImageRepNetwork; Term is handled inside. */
+	void InitVoiceChat(const FWendyWorldConnectingInfo& InConnectingInfo);
+	void TermVoiceChat();
+
+	/** Null when voice chat isn't running. Game thread use only (the audio thread must go through the
+	 * mixer state instead, which is shared by value for exactly that reason). */
+	FWendyVoiceChat* GetVoiceChat() const;
+	FWendyVoiceMixerStatePtr GetVoiceMixerState() const;
 
 
 	////////////////////////////////////////////////////////////////////////

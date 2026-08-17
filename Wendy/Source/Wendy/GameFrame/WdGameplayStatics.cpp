@@ -85,6 +85,9 @@ void UWdGameplayStatics::EnterWendyWorld(UObject* WorldContextObject, const FWen
 	if (IsValid(WendyGameInst))
 	{
 		WendyGameInst->InitImageRepNetwork(CheckedConnectingInfo);
+		// OpenLevel above is deferred, so this still runs before the new level's actors reach BeginPlay -
+		// which is what lets the voice playback buffer be ready when the local character asks for it.
+		WendyGameInst->InitVoiceChat(CheckedConnectingInfo);
 	}
 }
 

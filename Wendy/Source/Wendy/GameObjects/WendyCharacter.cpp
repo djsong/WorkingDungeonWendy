@@ -19,6 +19,7 @@
 #include "WendyDesktopImageComponent.h"
 #include "WendyDungeonPlayerController.h"
 #include "WendyDungeonSeat.h"
+#include "WendyVoiceSynthComponent.h"
 #include "WendyUINameTag.h"
 #include "WendyImageRepNetwork.h"
 #include "WendyImageRepPackets.h"
@@ -155,6 +156,11 @@ AWendyCharacter::AWendyCharacter(const FObjectInitializer& ObjectInitializer)
 	NameTagComp->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 
 	DesktopImageComponent = CreateDefaultSubobject<UWendyDesktopImageComponent>(TEXT("DesktopImageComponent"));
+
+	// Voice is flat (non-positional), so this is the local listener's single mixing point rather than a
+	// per-speaker emitter. It stays silent on every character except the locally controlled one.
+	VoiceSynthComponent = CreateDefaultSubobject<UWendyVoiceSynthComponent>(TEXT("VoiceSynthComponent"));
+	VoiceSynthComponent->SetupAttachment(RootComponent);
 
 	HomeSeat = nullptr;
 	PickedHomeSeatPosition = FVector2D::ZeroVector;

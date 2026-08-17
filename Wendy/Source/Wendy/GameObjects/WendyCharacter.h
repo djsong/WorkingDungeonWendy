@@ -10,6 +10,7 @@
 class AWendyDungeonSeat;
 class UWidgetComponent;
 class UWendyDesktopImageComponent;
+class UWendyVoiceSynthComponent;
 
 
 /** Not in byte.. element number. */
@@ -110,6 +111,11 @@ protected:
 
 	UPROPERTY(VisibleAnywhere)
 	UWendyDesktopImageComponent* DesktopImageComponent;
+
+	/** Voice playback for the local listener. Flat/non-positional, so this single component mixes every
+	 * speaker; it stays silent on all non-locally-controlled characters. */
+	UPROPERTY(VisibleAnywhere)
+	UWendyVoiceSynthComponent* VoiceSynthComponent;
 	
 	/** To be assigned runtime. No attachment relation with this.
 	 * It is where the captured desktop image finally goes. */

@@ -10,17 +10,20 @@ public class Wendy : ModuleRules
 
 		PublicDependencyModuleNames.AddRange(new string[] {
             "ApplicationCore",
+            "AudioMixer",        // USynthComponent, for voice playback
             "Core",
             "CoreUObject",
             "DeveloperSettings",
             "Engine",
             "InputCore",
-            "NetCore",            
+            "NetCore",
             "RenderCore",
+            "SignalProcessing",  // Audio::TCircularAudioBuffer (SPSC), for voice playback hand-off
             "Slate",
             "SlateCore",
             "UMG",
-			"Sockets"
+			"Sockets",
+            "Voice"              // IVoiceCapture + Opus IVoiceEncoder/IVoiceDecoder
 		});
 
         PublicIncludePaths.AddRange(new string[] {
