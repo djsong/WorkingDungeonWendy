@@ -523,6 +523,25 @@ void FWendyVoiceChat::ReceiveVoiceDatagrams()
 						*NewEndpoint.SpeakerId, *NewEndpoint.Addr->ToString(true));
 				}
 			}
+
+			// Relay this speaker on to every OTHER client, so clients hear each other rather than only the
+			// server. Forwarding the RAW datagram is what makes this so cheap: the original SpeakerId travels
+			// with it, so attribution stays correct and no re-encoding is needed. Safe to send straight from
+			// DatagramScratch because nothing rewrites it between the RecvFrom above and here.
+			// Keepalives are deliberately not relayed - they exist only for the address learning above, and
+			// clients never need each other's addresses in a star relay.
+			if (Packet.CompressedSize > 0)
+			{
+				for (const FWendyVoiceRemoteEndpoint& Endpoint : KnownEndpoints)
+				{
+					if (Endpoint.SpeakerId != Packet.SpeakerId && Endpoint.Addr.IsValid())
+					{
+						int32 RelayBytesSent = 0;
+						VoiceSocket->SendTo(DatagramScratch.GetData(), BytesRead, RelayBytesSent, *Endpoint.Addr);
+						++PacketsSentThisSecond;
+					}
+				}
+			}
 		}
 
 		// Keepalives carry no audio; they exist purely for the address learning above.
