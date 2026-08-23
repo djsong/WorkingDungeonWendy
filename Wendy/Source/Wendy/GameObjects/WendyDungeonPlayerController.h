@@ -72,6 +72,11 @@ private:
 	/** Movement sampled this tick while dragging, consumed by PlayerTick. */
 	FVector2D PendingRelativeMouseDelta = FVector2D::ZeroVector;
 
+	/** True for the key bound to wd.Voice.PushToTalkKey. That key is handled purely locally and is never
+	 * queued for remote-input forwarding. */
+	bool IsVoicePushToTalkKey(const FKey& InKey) const;
+	void UpdateVoicePushToTalkState(EWendyRemoteInputEvents InCapturedEvent);
+
 	void EnterRelativeMouseMode();
 	void ExitRelativeMouseMode();
 	/** Per-tick check that promotes a held mouse button to a real drag once it moves past the threshold. */

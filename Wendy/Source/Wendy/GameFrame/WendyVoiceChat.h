@@ -113,6 +113,17 @@ public:
 	/** Shared with the synth component so the audio thread never has to touch a UObject or this class. */
 	FWendyVoiceMixerStatePtr GetMixerState() const { return MixerState; }
 
+	/** Game thread -> voice thread. Only consulted while wd.Voice.PushToTalk is on. */
+	void SetPushToTalkActive(bool bInActive) { PushToTalkActive.Set(bInActive ? 1 : 0); }
+	bool IsPushToTalkActive() const { return PushToTalkActive.GetValue() != 0; }
+
+	/** Whichever microphone the capture actually opened - see the caveat where this is filled in.
+	 * Written once during InitVoice on the game thread, before the voice thread exists, so free to read. */
+	const FString& GetCaptureDeviceName() const { return CaptureDeviceName; }
+
+	/** Comma separated list of who is currently audible. Rebuilt once a second on the voice thread. */
+	FString GetDebugSpeakerNames() const;
+
 	//////////////////////////
 	// Debug readout. Written on the voice thread, read on the game thread.
 	int32 GetDebugCaptureState() const { return DebugCaptureState.GetValue(); }
@@ -124,9 +135,14 @@ public:
 	int32 GetDebugPacketsRecvPerSec() const { return DebugPacketsRecvPerSec.GetValue(); }
 	int32 GetDebugActiveSpeakers() const { return DebugActiveSpeakers.GetValue(); }
 	int32 GetDebugKnownEndpoints() const { return DebugKnownEndpoints.GetValue(); }
+	/** 1 while the mic is actually going out on the wire, 0 while gated by push-to-talk or mute. */
+	int32 GetDebugTransmitting() const { return DebugTransmitting.GetValue(); }
 
 private:
 	bool InitSocket();
+	void QueryCaptureDeviceName();
+	/** Push-to-talk / mute gating, evaluated per tick on the voice thread. */
+	bool ShouldTransmitVoice() const;
 
 	/** Pull whatever the mic has ready into CaptureAccumulator. */
 	void PollCapturedAudio();
@@ -175,6 +191,16 @@ private:
 
 	bool bVoiceInitialized = false;
 
+	/** Set from the game thread by the push-to-talk key. */
+	FThreadSafeCounter PushToTalkActive;
+
+	/** Filled once during InitVoice; never changes afterwards. */
+	FString CaptureDeviceName;
+
+	/** Built on the voice thread, read on the game thread - hence the lock. Only touched once a second. */
+	mutable FCriticalSection DebugSpeakerNamesMutex;
+	FString DebugSpeakerNames;
+
 	FThreadSafeCounter DebugCaptureState;
 	FThreadSafeCounter DebugMicPeak;
 	FThreadSafeCounter DebugFramesPerSec;
@@ -184,6 +210,7 @@ private:
 	FThreadSafeCounter DebugPacketsRecvPerSec;
 	FThreadSafeCounter DebugActiveSpeakers;
 	FThreadSafeCounter DebugKnownEndpoints;
+	FThreadSafeCounter DebugTransmitting;
 	/** Accumulated within the current second, then published to the *PerSec counters above. */
 	int32 FramesThisSecond = 0;
 	int32 EncodedBytesThisSecond = 0;

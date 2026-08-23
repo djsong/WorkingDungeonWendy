@@ -10,6 +10,7 @@ public class Wendy : ModuleRules
 
 		PublicDependencyModuleNames.AddRange(new string[] {
             "ApplicationCore",
+            "AudioCaptureCore",  // Capture device enumeration, only to display which mic is in use
             "AudioMixer",        // USynthComponent, for voice playback
             "Core",
             "CoreUObject",

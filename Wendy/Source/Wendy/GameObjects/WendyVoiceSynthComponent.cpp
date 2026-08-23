@@ -13,6 +13,12 @@ static TAutoConsoleVariable<float> CVarWdVoicePlaybackGain(
 	TEXT("Linear gain applied to decoded voice audio during playback."),
 	ECVF_Default);
 
+static TAutoConsoleVariable<int32> CVarWdVoiceMuteOutput(
+	TEXT("wd.Voice.MuteOutput"),
+	0,
+	TEXT("1 silences incoming voice without affecting your own transmission (that is wd.Voice.MuteInput)."),
+	ECVF_Default);
+
 static TAutoConsoleVariable<int32> CVarWdVoiceShowDebug(
 	TEXT("wd.Voice.ShowDebug"),
 	0,
@@ -103,9 +109,11 @@ int32 UWendyVoiceSynthComponent::OnGenerateAudio(float* OutAudio, int32 NumSampl
 		}
 
 		// Sums every active speaker; returns 0 when nobody is talking.
+		// Still drained while muted, so unmuting resumes live rather than replaying a backlog.
 		PoppedSamples = MixerState->MixInto(PopScratch.GetData(), NumSamples);
 
-		const float PlaybackGain = CVarWdVoicePlaybackGain.GetValueOnAnyThread();
+		const bool bMuteOutput = CVarWdVoiceMuteOutput.GetValueOnAnyThread() > 0;
+		const float PlaybackGain = bMuteOutput ? 0.0f : CVarWdVoicePlaybackGain.GetValueOnAnyThread();
 		// int16 -> normalized float, which is what the mixer expects.
 		const float ToFloatScale = PlaybackGain / static_cast<float>(-static_cast<int32>(MIN_int16));
 		for (int32 SampleIdx = 0; SampleIdx < PoppedSamples; ++SampleIdx)
@@ -163,20 +171,35 @@ void UWendyVoiceSynthComponent::DrawVoiceDebugReadout()
 	FString MicMeter = FString::ChrN(MeterBars, TEXT('|'));
 	MicMeter.Append(FString::ChrN(20 - MeterBars, TEXT('.')));
 
+	// "why is nothing going out" is the question this line has to answer at a glance.
+	const TCHAR* TransmitStateName = (VoiceChat->GetDebugTransmitting() != 0) ? TEXT("LIVE") : TEXT("SILENT");
+
+	// wd.Voice.PushToTalk is file-static over in WendyVoiceChat.cpp, so look it up by name - the same way
+	// the engine's own voice capture reads its threshold CVars.
+	static IConsoleVariable* PushToTalkCVar = IConsoleManager::Get().FindConsoleVariable(TEXT("wd.Voice.PushToTalk"));
+	const bool bPushToTalkMode = (PushToTalkCVar != nullptr && PushToTalkCVar->GetInt() > 0);
+	const TCHAR* MicModeName = bPushToTalkMode ? TEXT("push-to-talk") : TEXT("open mic");
+
 	const FString DebugMsg = FString::Printf(
-		TEXT("Wendy Voice | capture:%s  mic:[%s]%3d%%  %d frames/s  %d B/s\n")
-		TEXT("            | net  tx:%d/s  rx:%d/s  endpoints:%d  speakers:%d  queued:%d (%.0f ms)"),
+		TEXT("Wendy Voice | %s (%s)%s  capture:%s  mic:[%s]%3d%%  %d frames/s  %d B/s\n")
+		TEXT("            | mic device (system default): %s\n")
+		TEXT("            | net  tx:%d/s  rx:%d/s  endpoints:%d  queued:%d (%.0f ms)\n")
+		TEXT("            | hearing: %s"),
+		TransmitStateName,
+		MicModeName,
+		(CVarWdVoiceMuteOutput.GetValueOnGameThread() > 0) ? TEXT("  [OUTPUT MUTED]") : TEXT(""),
 		CaptureStateName,
 		*MicMeter,
 		MicPeak,
 		VoiceChat->GetDebugFramesPerSec(),
 		VoiceChat->GetDebugEncodedBytesPerSec(),
+		*VoiceChat->GetCaptureDeviceName(),
 		VoiceChat->GetDebugPacketsSentPerSec(),
 		VoiceChat->GetDebugPacketsRecvPerSec(),
 		VoiceChat->GetDebugKnownEndpoints(),
-		VoiceChat->GetDebugActiveSpeakers(),
 		VoiceChat->GetDebugPlaybackQueuedSamples(),
-		(1000.0f * VoiceChat->GetDebugPlaybackQueuedSamples()) / static_cast<float>(WENDY_VOICE_SAMPLE_RATE));
+		(1000.0f * VoiceChat->GetDebugPlaybackQueuedSamples()) / static_cast<float>(WENDY_VOICE_SAMPLE_RATE),
+		*VoiceChat->GetDebugSpeakerNames());
 
 	const uint64 MessageKey = static_cast<uint64>(reinterpret_cast<UPTRINT>(this));
 	GEngine->AddOnScreenDebugMessage(MessageKey, 2.0f, FColor::Green, DebugMsg);

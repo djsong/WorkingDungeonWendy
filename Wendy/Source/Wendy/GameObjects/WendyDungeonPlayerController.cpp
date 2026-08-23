@@ -30,6 +30,14 @@ static TAutoConsoleVariable<int32> CVarWdRemoteInputRelativeDragMode(
 	TEXT("stays visible throughout, so ordinary pointing and window dragging are unaffected. Set 0 to force absolute-only."),
 	ECVF_Default);
 
+static TAutoConsoleVariable<FString> CVarWdVoicePushToTalkKeyName(
+	TEXT("wd.Voice.PushToTalkKey"),
+	TEXT("V"),
+	TEXT("Key held to transmit while wd.Voice.PushToTalk is 1. Uses UE key names (V, LeftAlt, CapsLock...).")
+	TEXT(" This key is deliberately never forwarded to a remote desktop in focus mode, so holding it cannot")
+	TEXT(" type into whoever's screen you are driving."),
+	ECVF_Default);
+
 static TAutoConsoleVariable<float> CVarWdRemoteInputDragThresholdPixels(
 	TEXT("wd.RemoteInput.DragThresholdPixels"),
 	5.0f,
@@ -185,7 +193,13 @@ bool AWendyDungeonPlayerController::InputKey(const FInputKeyEventArgs& Params)
 	}
 
 	EWendyRemoteInputKeys CapturedKey = EWendyRemoteInputKeys::None;
-	if (Params.Key == EKeys::LeftMouseButton)
+	if (IsVoicePushToTalkKey(Params.Key))
+	{
+		// Push-to-talk is a purely LOCAL control, so CapturedKey is deliberately left as None: were it
+		// forwarded, holding it in focus mode would also type into whoever's desktop we are driving.
+		UpdateVoicePushToTalkState(CapturedEvent);
+	}
+	else if (Params.Key == EKeys::LeftMouseButton)
 	{
 		CapturedKey = EWendyRemoteInputKeys::MLB;
 
@@ -574,6 +588,36 @@ void AWendyDungeonPlayerController::UpdateFocusingDisplayHitUV()
 	if (false == bSetHitUV)
 	{
 		FocusingModeMonitorHitInputInfo.SetInvalid();
+	}
+}
+
+bool AWendyDungeonPlayerController::IsVoicePushToTalkKey(const FKey& InKey) const
+{
+	const FString PushToTalkKeyName = CVarWdVoicePushToTalkKeyName.GetValueOnGameThread();
+	if (PushToTalkKeyName.IsEmpty())
+	{
+		return false;
+	}
+
+	return InKey.GetFName() == FName(*PushToTalkKeyName);
+}
+
+void AWendyDungeonPlayerController::UpdateVoicePushToTalkState(EWendyRemoteInputEvents InCapturedEvent)
+{
+	if (InCapturedEvent == EWendyRemoteInputEvents::None)
+	{
+		return;
+	}
+
+	UWendyGameInstance* WdGameInst = Cast<UWendyGameInstance>(UGameplayStatics::GetGameInstance(this));
+	if (false == IsValid(WdGameInst))
+	{
+		return;
+	}
+
+	if (FWendyVoiceChat* VoiceChat = WdGameInst->GetVoiceChat())
+	{
+		VoiceChat->SetPushToTalkActive(InCapturedEvent == EWendyRemoteInputEvents::Pressed);
 	}
 }
 

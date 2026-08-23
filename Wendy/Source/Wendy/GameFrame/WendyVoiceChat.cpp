@@ -4,6 +4,7 @@
 #include "HAL/PlatformProcess.h" // For FPlatformProcess::Sleep()
 #include "Interfaces/VoiceCapture.h"
 #include "Interfaces/VoiceCodec.h"
+#include "AudioCaptureCore.h"
 #include "IPAddress.h"
 #include "SocketSubsystem.h"
 #include "Sockets.h"
@@ -30,8 +31,25 @@ static TAutoConsoleVariable<int32> CVarWdVoiceLoopback(
 
 static TAutoConsoleVariable<float> CVarWdVoiceMicGain(
 	TEXT("wd.Voice.MicGain"),
-	1.0f,
+	5.0f,
 	TEXT("Linear gain applied to captured microphone audio before encoding."),
+	ECVF_Default);
+
+static TAutoConsoleVariable<int32> CVarWdVoicePushToTalk(
+	TEXT("wd.Voice.PushToTalk"),
+	0,
+	TEXT("0 = open mic: transmit whenever the microphone picks up sound above voice.SilenceDetectionThreshold.")
+	TEXT(" 1 = push-to-talk: transmit only while wd.Voice.PushToTalkKey is held.")
+	TEXT(" Open mic is the default because it is what conversation actually feels like; push-to-talk is there")
+	TEXT(" for when background noise or privacy matters more."),
+	ECVF_Default);
+
+// Note: wd.Voice.PushToTalkKey lives in WendyDungeonPlayerController.cpp, where the key is matched.
+
+static TAutoConsoleVariable<int32> CVarWdVoiceMuteInput(
+	TEXT("wd.Voice.MuteInput"),
+	0,
+	TEXT("1 mutes your microphone outright - nothing is transmitted regardless of push-to-talk or open mic."),
 	ECVF_Default);
 
 static TAutoConsoleVariable<float> CVarWdVoiceKeepAliveInterval(
@@ -186,6 +204,49 @@ bool FWendyVoiceChat::InitSocket()
 	return true;
 }
 
+void FWendyVoiceChat::QueryCaptureDeviceName()
+{
+	// CAVEAT: IVoiceCapture cannot tell us which device it opened - it only ACCEPTS a name ("" = default),
+	// with no getter and no enumeration. So we ask AudioCaptureCore for the system default instead, which is
+	// what "" resolves to in practice. Inferred rather than reported, and labelled as such in the readout.
+	CaptureDeviceName = TEXT("(unknown)");
+
+	Audio::FAudioCapture DeviceQuery;
+	Audio::FCaptureDeviceInfo DefaultDeviceInfo;
+	if (DeviceQuery.GetCaptureDeviceInfo(DefaultDeviceInfo, Audio::DefaultDeviceIndex))
+	{
+		if (false == DefaultDeviceInfo.DeviceName.IsEmpty())
+		{
+			CaptureDeviceName = DefaultDeviceInfo.DeviceName;
+		}
+	}
+
+	UE_LOG(LogWendyVoiceChat, Log, TEXT("Voice capture device (system default): %s"), *CaptureDeviceName);
+}
+
+bool FWendyVoiceChat::ShouldTransmitVoice() const
+{
+	if (CVarWdVoiceMuteInput.GetValueOnAnyThread() > 0)
+	{
+		return false;
+	}
+
+	// Open mic transmits whenever the capture hands us audio; the engine's silence detection has already
+	// decided that is worth sending. Push-to-talk adds the extra requirement of holding the key.
+	if (CVarWdVoicePushToTalk.GetValueOnAnyThread() > 0)
+	{
+		return PushToTalkActive.GetValue() != 0;
+	}
+
+	return true;
+}
+
+FString FWendyVoiceChat::GetDebugSpeakerNames() const
+{
+	FScopeLock SpeakerNamesLock(&DebugSpeakerNamesMutex);
+	return DebugSpeakerNames;
+}
+
 void FWendyVoiceChat::InitVoice(const FWendyWorldConnectingInfo& InConnectingInfo)
 {
 	if (bVoiceInitialized)
@@ -203,6 +264,8 @@ void FWendyVoiceChat::InitVoice(const FWendyWorldConnectingInfo& InConnectingInf
 		UE_LOG(LogWendyVoiceChat, Warning, TEXT("Voice module unavailable or disabled. Is [Voice] bEnabled=true set in DefaultEngine.ini?"));
 		return;
 	}
+
+	QueryCaptureDeviceName();
 
 	// Empty device name = system default input device.
 	VoiceCapture = FVoiceModule::Get().CreateVoiceCapture(FString(), WENDY_VOICE_SAMPLE_RATE, WENDY_VOICE_NUM_CHANNELS);
@@ -321,13 +384,22 @@ void FWendyVoiceChat::UpdateTick()
 		return;
 	}
 
+	// Always polled, even when we aren't transmitting, so the on-screen mic meter still responds - that is
+	// how you tell "muted" apart from "microphone isn't working".
 	PollCapturedAudio();
 
+	const bool bShouldTransmit = ShouldTransmitVoice();
+	DebugTransmitting.Set(bShouldTransmit ? 1 : 0);
+
 	// Encode every whole frame we now have, then drop them all in one go (cheaper than shifting per frame).
+	// While gated we still consume the samples rather than letting a backlog build up and burst later.
 	int32 ConsumedSamples = 0;
 	while ((CaptureAccumulator.Num() - ConsumedSamples) >= WENDY_VOICE_FRAME_SAMPLES)
 	{
-		EncodeAndRouteFrame(CaptureAccumulator.GetData() + ConsumedSamples);
+		if (bShouldTransmit)
+		{
+			EncodeAndRouteFrame(CaptureAccumulator.GetData() + ConsumedSamples);
+		}
 		ConsumedSamples += WENDY_VOICE_FRAME_SAMPLES;
 	}
 	if (ConsumedSamples > 0)
@@ -705,6 +777,23 @@ void FWendyVoiceChat::UpdateDebugCountersPerSecond()
 	const double CurrTime = FPlatformTime::Seconds();
 	if (CurrTime - LastDebugPublishTime >= 1.0)
 	{
+		// Rebuilt only once a second, which is why taking a lock for it is fine.
+		if (MixerState.IsValid())
+		{
+			TArray<FString> SpeakerNames;
+			for (int32 SlotIdx = 0; SlotIdx < FWendyVoiceMixerState::MaxSpeakers; ++SlotIdx)
+			{
+				const FWendyVoiceSpeakerSlot& Slot = MixerState->Slots[SlotIdx];
+				if (Slot.bActive.GetValue() != 0)
+				{
+					SpeakerNames.Add(Slot.SpeakerId);
+				}
+			}
+
+			FScopeLock SpeakerNamesLock(&DebugSpeakerNamesMutex);
+			DebugSpeakerNames = (SpeakerNames.Num() > 0) ? FString::Join(SpeakerNames, TEXT(", ")) : TEXT("-");
+		}
+
 		DebugFramesPerSec.Set(FramesThisSecond);
 		DebugEncodedBytesPerSec.Set(EncodedBytesThisSecond);
 		DebugPacketsSentPerSec.Set(PacketsSentThisSecond);
