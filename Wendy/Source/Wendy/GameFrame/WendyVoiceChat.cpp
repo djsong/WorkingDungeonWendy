@@ -52,6 +52,15 @@ static TAutoConsoleVariable<int32> CVarWdVoiceMuteInput(
 	TEXT("1 mutes your microphone outright - nothing is transmitted regardless of push-to-talk or open mic."),
 	ECVF_Default);
 
+static TAutoConsoleVariable<int32> CVarWdVoiceJitterBufferMs(
+	TEXT("wd.Voice.JitterBufferMs"),
+	60,
+	TEXT("Milliseconds of audio to bank per speaker before playing them, absorbing uneven packet arrival.")
+	TEXT(" Higher = fewer dropouts but more delay; lower = snappier but more prone to gaps.")
+	TEXT(" Tune against the underruns/s figure in wd.Voice.ShowDebug: if it is above zero while someone")
+	TEXT(" talks steadily, raise this. 0 disables buffering entirely (lowest latency, most fragile)."),
+	ECVF_Default);
+
 static TAutoConsoleVariable<float> CVarWdVoiceKeepAliveInterval(
 	TEXT("wd.Voice.KeepAliveInterval"),
 	1.0f,
@@ -84,6 +93,12 @@ int32 FWendyVoiceMixerState::MixInto(int16* OutSamples, int32 NumSamples)
 		MixScratch.SetNumUninitialized(NumSamples);
 	}
 
+	// Jitter buffer: how much audio to bank before a speaker starts playing. Packets arrive unevenly, so
+	// playing the instant one lands means the very next late packet becomes an audible gap. Holding a
+	// cushion trades that latency for the ability to ride through a hiccup.
+	const int32 JitterBufferMs = FMath::Max(CVarWdVoiceJitterBufferMs.GetValueOnAnyThread(), 0);
+	const int32 PrimeTargetSamples = (WENDY_VOICE_SAMPLE_RATE * JitterBufferMs) / 1000;
+
 	int32 MixedSamples = 0;
 
 	for (int32 SlotIdx = 0; SlotIdx < MaxSpeakers; ++SlotIdx)
@@ -94,7 +109,26 @@ int32 FWendyVoiceMixerState::MixInto(int16* OutSamples, int32 NumSamples)
 			continue;
 		}
 
+		// Still filling: stay silent rather than emit a fragment we'd immediately underrun after.
+		if (false == Slot.bPrimed)
+		{
+			if (static_cast<int32>(Slot.Buffer.Num()) < PrimeTargetSamples)
+			{
+				continue;
+			}
+			Slot.bPrimed = true;
+		}
+
 		const int32 PoppedSamples = Slot.Buffer.Pop(MixScratch.GetData(), static_cast<uint32>(NumSamples));
+
+		// Couldn't fill the request, so this speaker has run dry. Use whatever did arrive, then go back to
+		// filling - otherwise we'd stutter on every callback instead of pausing once and recovering.
+		if (PoppedSamples < NumSamples)
+		{
+			Slot.bPrimed = false;
+			UnderrunCount.Increment();
+		}
+
 		if (PoppedSamples <= 0)
 		{
 			continue;
@@ -648,6 +682,8 @@ FWendyVoiceSpeakerSlot* FWendyVoiceChat::FindOrClaimSpeakerSlot(const FString& I
 			Slot.SpeakerId = InSpeakerId;
 			Slot.LastSequenceNumber = 0;
 			Slot.bHasReceivedAny = false;
+			// Start out filling rather than playing, so a new speaker doesn't begin with an instant underrun.
+			Slot.bPrimed = false;
 			// Safe to touch the buffer only because bActive is still 0 here, so the audio thread is
 			// skipping this slot entirely. Doubles as discarding any audio left by a previous occupant.
 			Slot.Buffer.SetCapacity(WENDY_VOICE_PLAYBACK_BUFFER_SAMPLES);
@@ -792,6 +828,14 @@ void FWendyVoiceChat::UpdateDebugCountersPerSecond()
 
 			FScopeLock SpeakerNamesLock(&DebugSpeakerNamesMutex);
 			DebugSpeakerNames = (SpeakerNames.Num() > 0) ? FString::Join(SpeakerNames, TEXT(", ")) : TEXT("-");
+		}
+
+		// The mixer counts underruns cumulatively on the audio thread; publish the per-second delta.
+		if (MixerState.IsValid())
+		{
+			const int32 CurrUnderrunCount = MixerState->UnderrunCount.GetValue();
+			DebugUnderrunsPerSec.Set(FMath::Max(CurrUnderrunCount - LastUnderrunCountSnapshot, 0));
+			LastUnderrunCountSnapshot = CurrUnderrunCount;
 		}
 
 		DebugFramesPerSec.Set(FramesThisSecond);

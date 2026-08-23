@@ -183,7 +183,7 @@ void UWendyVoiceSynthComponent::DrawVoiceDebugReadout()
 	const FString DebugMsg = FString::Printf(
 		TEXT("Wendy Voice | %s (%s)%s  capture:%s  mic:[%s]%3d%%  %d frames/s  %d B/s\n")
 		TEXT("            | mic device (system default): %s\n")
-		TEXT("            | net  tx:%d/s  rx:%d/s  endpoints:%d  queued:%d (%.0f ms)\n")
+		TEXT("            | net  tx:%d/s  rx:%d/s  endpoints:%d  queued:%d (%.0f ms)  underruns:%d/s\n")
 		TEXT("            | hearing: %s"),
 		TransmitStateName,
 		MicModeName,
@@ -199,6 +199,7 @@ void UWendyVoiceSynthComponent::DrawVoiceDebugReadout()
 		VoiceChat->GetDebugKnownEndpoints(),
 		VoiceChat->GetDebugPlaybackQueuedSamples(),
 		(1000.0f * VoiceChat->GetDebugPlaybackQueuedSamples()) / static_cast<float>(WENDY_VOICE_SAMPLE_RATE),
+		VoiceChat->GetDebugUnderrunsPerSec(),
 		*VoiceChat->GetDebugSpeakerNames());
 
 	const uint64 MessageKey = static_cast<uint64>(reinterpret_cast<UPTRINT>(this));

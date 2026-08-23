@@ -50,6 +50,12 @@ struct FWendyVoiceSpeakerSlot
 	/** Written by the voice thread, read by the audio render thread. SPSC-safe. */
 	Audio::TCircularAudioBuffer<int16> Buffer;
 
+	/** Jitter-buffer state, owned by the audio thread once the slot is active (the voice thread only
+	 * clears it while claiming, when bActive is still 0 and the audio thread is ignoring the slot).
+	 * False means "still filling up" - we stay silent until enough audio has banked to play through the
+	 * next network hiccup, then flip to true and play continuously until we run dry again. */
+	bool bPrimed = false;
+
 	/** Read by the audio thread to decide whether this slot is worth mixing. 0 = free. */
 	FThreadSafeCounter bActive;
 };
@@ -73,6 +79,10 @@ public:
 	int32 MixInto(int16* OutSamples, int32 NumSamples);
 
 	FWendyVoiceSpeakerSlot Slots[MaxSpeakers];
+
+	/** Incremented on the audio thread whenever a playing speaker runs dry, read on the voice thread.
+	 * This is the number that tells you whether wd.Voice.JitterBufferMs is set high enough. */
+	FThreadSafeCounter UnderrunCount;
 
 private:
 	/** Audio thread only. Sized once at construction so the callback never allocates. */
@@ -137,6 +147,9 @@ public:
 	int32 GetDebugKnownEndpoints() const { return DebugKnownEndpoints.GetValue(); }
 	/** 1 while the mic is actually going out on the wire, 0 while gated by push-to-talk or mute. */
 	int32 GetDebugTransmitting() const { return DebugTransmitting.GetValue(); }
+	/** Times a playing speaker ran dry in the last second. Above zero during steady speech means
+	 * wd.Voice.JitterBufferMs is too low for this connection. */
+	int32 GetDebugUnderrunsPerSec() const { return DebugUnderrunsPerSec.GetValue(); }
 
 private:
 	bool InitSocket();
@@ -211,6 +224,9 @@ private:
 	FThreadSafeCounter DebugActiveSpeakers;
 	FThreadSafeCounter DebugKnownEndpoints;
 	FThreadSafeCounter DebugTransmitting;
+	FThreadSafeCounter DebugUnderrunsPerSec;
+	/** Last value read from the mixer's cumulative counter, so we can publish a per-second delta. */
+	int32 LastUnderrunCountSnapshot = 0;
 	/** Accumulated within the current second, then published to the *PerSec counters above. */
 	int32 FramesThisSecond = 0;
 	int32 EncodedBytesThisSecond = 0;
