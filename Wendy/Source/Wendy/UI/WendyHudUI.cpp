@@ -2,11 +2,14 @@
 
 #include "WendyHudUI.h"
 #include "Components/EditableTextBox.h"
+#include "Components/Image.h"
 #include "WdGameplayStatics.h"
 #include "WendyCommon.h"
 #include "WendyDungeonPlayerController.h"
 #include "WendyExtendedWidgets.h"
 #include "WendyCharacter.h"
+#include "WendyGameInstance.h"
+#include "Kismet/GameplayStatics.h"
 
 UWendyHudUI::UWendyHudUI(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
@@ -50,6 +53,14 @@ void UWendyHudUI::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
 
 	// Tried to do this on event time, but why bothers? It won't take perfomance that seriously.
 	UpdateFocusModeMessage();
+
+	// Same here, let's don't get bothered much. 
+	const double CurrTime = FPlatformTime::Seconds();
+	if (CurrTime - LastVoiceChatDeviceStateUpateTime > 1.0)
+	{
+		UpdateVoiceChatDeviceState();
+		LastVoiceChatDeviceStateUpateTime = CurrTime;
+	}
 }
 
 void UWendyHudUI::StaticWidgetPreparations()
@@ -131,5 +142,44 @@ void UWendyHudUI::UpdateFocusModeMessage()
 		{
 			TB_FocusModeMessage->SetVisibility(ESlateVisibility::Hidden);
 		}
+	}
+}
+
+void UWendyHudUI::UpdateVoiceChatDeviceState()
+{
+	// Null whenever voice chat isn't running (failed to start, or no microphone). Everything below then
+	// shows the off state rather than going blank, so "voice is dead" is visible rather than ambiguous.
+	FWendyVoiceChat* VoiceChat = nullptr;
+	if (UWendyGameInstance* WdGameInst = Cast<UWendyGameInstance>(UGameplayStatics::GetGameInstance(this)))
+	{
+		VoiceChat = WdGameInst->GetVoiceChat();
+	}
+
+	const bool bMicrophoneActive = (VoiceChat != nullptr) && VoiceChat->IsMicrophoneActive();
+	const bool bSpeakerActive = (VoiceChat != nullptr) && VoiceChat->IsSpeakerActive();
+
+	if (IsValid(IMG_MicState))
+	{
+		// Green whenever your voice would actually reach someone: running, not muted, and (in push-to-talk
+		// mode) the key held. So in push-to-talk this lights up exactly while you are transmitting.
+		IMG_MicState->SetColorAndOpacity(FLinearColor(bMicrophoneActive ? VoiceChatDeviceColor_On : VoiceChatDeviceColor_Off));
+	}
+	if (IsValid(IMG_SpeakerState))
+	{
+		IMG_SpeakerState->SetColorAndOpacity(FLinearColor(bSpeakerActive ? VoiceChatDeviceColor_On : VoiceChatDeviceColor_Off));
+	}
+
+	if (IsValid(TB_MicDevice))
+	{
+		// Resolved once when capture opened - see FWendyVoiceChat::QueryMicrophoneDeviceName for why this is
+		// the system default rather than a device the capture reports back.
+		const FString MicrophoneDeviceName = (VoiceChat != nullptr)
+			? VoiceChat->GetMicrophoneDeviceName() : TEXT("(voice chat not running)");
+		TB_MicDevice->SetText(FText::FromString(MicrophoneDeviceName));
+	}
+	if (IsValid(TB_SpeakerDevice))
+	{
+		// Asked of the engine every update, so swapping headphones mid-session is reflected.
+		TB_SpeakerDevice->SetText(FText::FromString(FWendyVoiceChat::GetPlaybackDeviceName(this)));
 	}
 }

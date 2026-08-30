@@ -10,6 +10,7 @@
 class UWdButton;
 class UWdTextBlock;
 class UEditableTextBox;
+class UImage;
 
 UCLASS(Blueprintable)
 class UWendyHudUI : public UWendyUiWidget
@@ -26,6 +27,26 @@ protected:
 
 	UPROPERTY(Transient, meta = (BindWidget))
 	UWdTextBlock* TB_FocusModeMessage = nullptr;
+
+	UPROPERTY(Transient, meta = (BindWidget))
+	UImage* IMG_MicState = nullptr;
+
+	UPROPERTY(Transient, meta = (BindWidget))
+	UImage* IMG_SpeakerState = nullptr;
+
+	UPROPERTY(Transient, meta = (BindWidget))
+	UWdTextBlock* TB_MicDevice = nullptr;
+
+	UPROPERTY(Transient, meta = (BindWidget))
+	UWdTextBlock* TB_SpeakerDevice = nullptr;
+
+	UPROPERTY(EditAnywhere, Category="WendyHudUI")
+	FColor VoiceChatDeviceColor_On = FColor::Green;
+
+	UPROPERTY(EditAnywhere, Category = "WendyHudUI")
+	FColor VoiceChatDeviceColor_Off = FColor::Red;
+	
+	double LastVoiceChatDeviceStateUpateTime = 0.0;
 
 public:
 	UWendyHudUI(const FObjectInitializer& ObjectInitializer);
@@ -49,5 +70,7 @@ public:
 	void OnWdDesktopFocusingInputModeEvent();
 
 	void UpdateFocusModeMessage();
+
+	void UpdateVoiceChatDeviceState();
 };
 

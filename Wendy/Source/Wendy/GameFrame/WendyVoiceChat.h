@@ -127,12 +127,25 @@ public:
 	void SetPushToTalkActive(bool bInActive) { PushToTalkActive.Set(bInActive ? 1 : 0); }
 	bool IsPushToTalkActive() const { return PushToTalkActive.GetValue() != 0; }
 
-	/** Whichever microphone the capture actually opened - see the caveat where this is filled in.
-	 * Written once during InitVoice on the game thread, before the voice thread exists, so free to read. */
-	const FString& GetCaptureDeviceName() const { return CaptureDeviceName; }
+	////////////////////////////////////////////////////////////////////////
+	// Voice chat status, for the HUD as well as diagnostics.
 
-	/** Comma separated list of who is currently audible. Rebuilt once a second on the voice thread. */
-	FString GetDebugSpeakerNames() const;
+	/** True when your voice would actually reach anyone right now: running, not input-muted, and either
+	 * open mic or push-to-talk held. This is the "am I being heard" light. */
+	bool IsMicrophoneActive() const;
+	/** True when incoming voice would actually be heard: running and not output-muted. */
+	bool IsSpeakerActive() const;
+
+	/** The microphone in use. Resolved once during InitVoice - see the caveat there - and deliberately not
+	 * refreshed: if the system default changes later, our capture is still on the device it opened. */
+	const FString& GetMicrophoneDeviceName() const { return MicrophoneDeviceName; }
+	/** The audio output device, asked of the engine on demand so switching headphones is reflected.
+	 * GAME THREAD ONLY - it touches the engine's audio device, hence needing a world context object. */
+	static FString GetPlaybackDeviceName(const UObject* InWorldContextObject);
+
+	/** Comma separated list of who is currently audible ("-" when nobody). Rebuilt once a second on the
+	 * voice thread, so reading it is cheap. */
+	FString GetActiveSpeakerNames() const;
 
 	//////////////////////////
 	// Debug readout. Written on the voice thread, read on the game thread.
@@ -145,16 +158,14 @@ public:
 	int32 GetDebugPacketsRecvPerSec() const { return DebugPacketsRecvPerSec.GetValue(); }
 	int32 GetDebugActiveSpeakers() const { return DebugActiveSpeakers.GetValue(); }
 	int32 GetDebugKnownEndpoints() const { return DebugKnownEndpoints.GetValue(); }
-	/** 1 while the mic is actually going out on the wire, 0 while gated by push-to-talk or mute. */
-	int32 GetDebugTransmitting() const { return DebugTransmitting.GetValue(); }
 	/** Times a playing speaker ran dry in the last second. Above zero during steady speech means
 	 * wd.Voice.JitterBufferMs is too low for this connection. */
 	int32 GetDebugUnderrunsPerSec() const { return DebugUnderrunsPerSec.GetValue(); }
 
 private:
 	bool InitSocket();
-	void QueryCaptureDeviceName();
-	/** Push-to-talk / mute gating, evaluated per tick on the voice thread. */
+	void QueryMicrophoneDeviceName();
+	/** Push-to-talk / mute gating. Reads CVars only, so it is safe from any thread. */
 	bool ShouldTransmitVoice() const;
 
 	/** Pull whatever the mic has ready into CaptureAccumulator. */
@@ -208,11 +219,11 @@ private:
 	FThreadSafeCounter PushToTalkActive;
 
 	/** Filled once during InitVoice; never changes afterwards. */
-	FString CaptureDeviceName;
+	FString MicrophoneDeviceName;
 
 	/** Built on the voice thread, read on the game thread - hence the lock. Only touched once a second. */
-	mutable FCriticalSection DebugSpeakerNamesMutex;
-	FString DebugSpeakerNames;
+	mutable FCriticalSection ActiveSpeakerNamesMutex;
+	FString ActiveSpeakerNames;
 
 	FThreadSafeCounter DebugCaptureState;
 	FThreadSafeCounter DebugMicPeak;
@@ -223,7 +234,6 @@ private:
 	FThreadSafeCounter DebugPacketsRecvPerSec;
 	FThreadSafeCounter DebugActiveSpeakers;
 	FThreadSafeCounter DebugKnownEndpoints;
-	FThreadSafeCounter DebugTransmitting;
 	FThreadSafeCounter DebugUnderrunsPerSec;
 	/** Last value read from the mixer's cumulative counter, so we can publish a per-second delta. */
 	int32 LastUnderrunCountSnapshot = 0;

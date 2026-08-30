@@ -5,6 +5,8 @@
 #include "Interfaces/VoiceCapture.h"
 #include "Interfaces/VoiceCodec.h"
 #include "AudioCaptureCore.h"
+#include "AudioDeviceManager.h"
+#include "AudioMixerDevice.h"
 #include "IPAddress.h"
 #include "SocketSubsystem.h"
 #include "Sockets.h"
@@ -50,6 +52,12 @@ static TAutoConsoleVariable<int32> CVarWdVoiceMuteInput(
 	TEXT("wd.Voice.MuteInput"),
 	0,
 	TEXT("1 mutes your microphone outright - nothing is transmitted regardless of push-to-talk or open mic."),
+	ECVF_Default);
+
+static TAutoConsoleVariable<int32> CVarWdVoiceMuteOutput(
+	TEXT("wd.Voice.MuteOutput"),
+	0,
+	TEXT("1 silences incoming voice without affecting your own transmission (that is wd.Voice.MuteInput)."),
 	ECVF_Default);
 
 static TAutoConsoleVariable<int32> CVarWdVoiceJitterBufferMs(
@@ -238,12 +246,12 @@ bool FWendyVoiceChat::InitSocket()
 	return true;
 }
 
-void FWendyVoiceChat::QueryCaptureDeviceName()
+void FWendyVoiceChat::QueryMicrophoneDeviceName()
 {
 	// CAVEAT: IVoiceCapture cannot tell us which device it opened - it only ACCEPTS a name ("" = default),
 	// with no getter and no enumeration. So we ask AudioCaptureCore for the system default instead, which is
-	// what "" resolves to in practice. Inferred rather than reported, and labelled as such in the readout.
-	CaptureDeviceName = TEXT("(unknown)");
+	// what "" resolves to in practice. Inferred rather than reported.
+	MicrophoneDeviceName = TEXT("(unknown)");
 
 	Audio::FAudioCapture DeviceQuery;
 	Audio::FCaptureDeviceInfo DefaultDeviceInfo;
@@ -251,16 +259,51 @@ void FWendyVoiceChat::QueryCaptureDeviceName()
 	{
 		if (false == DefaultDeviceInfo.DeviceName.IsEmpty())
 		{
-			CaptureDeviceName = DefaultDeviceInfo.DeviceName;
+			MicrophoneDeviceName = DefaultDeviceInfo.DeviceName;
 		}
 	}
 
-	UE_LOG(LogWendyVoiceChat, Log, TEXT("Voice capture device (system default): %s"), *CaptureDeviceName);
+	UE_LOG(LogWendyVoiceChat, Log, TEXT("Voice microphone device: %s"), *MicrophoneDeviceName);
+}
+
+FString FWendyVoiceChat::GetPlaybackDeviceName(const UObject* InWorldContextObject)
+{
+	// Asked of the engine each time rather than cached, so swapping headphones mid-session shows up.
+	// Uses the engine's own accessor rather than casting an FAudioDevice ourselves - it performs the
+	// mixer-type check internally and returns null when the device isn't a mixer device.
+	if (InWorldContextObject != nullptr)
+	{
+		if (Audio::FMixerDevice* MixerDevice = FAudioDeviceManager::GetAudioMixerDeviceFromWorldContext(InWorldContextObject))
+		{
+			const FString& PlatformDeviceName = MixerDevice->GetPlatformDeviceInfo().Name;
+			if (false == PlatformDeviceName.IsEmpty())
+			{
+				return PlatformDeviceName;
+			}
+		}
+	}
+
+	return TEXT("(unknown)");
+}
+
+bool FWendyVoiceChat::IsMicrophoneActive() const
+{
+	return bVoiceInitialized && ShouldTransmitVoice();
+}
+
+bool FWendyVoiceChat::IsSpeakerActive() const
+{
+	// wd.Voice.Enabled is checked here as well as in ShouldTransmitVoice: the master switch makes UpdateTick
+	// return before ReceiveVoiceDatagrams, so nothing is decoded and nothing can be heard. Without this the
+	// HUD would show a live speaker while incoming voice was in fact going nowhere.
+	return bVoiceInitialized
+		&& (CVarWdVoiceEnabled.GetValueOnAnyThread() > 0)
+		&& (CVarWdVoiceMuteOutput.GetValueOnAnyThread() <= 0);
 }
 
 bool FWendyVoiceChat::ShouldTransmitVoice() const
 {
-	if (CVarWdVoiceMuteInput.GetValueOnAnyThread() > 0)
+	if (CVarWdVoiceEnabled.GetValueOnAnyThread() <= 0 || CVarWdVoiceMuteInput.GetValueOnAnyThread() > 0)
 	{
 		return false;
 	}
@@ -275,10 +318,10 @@ bool FWendyVoiceChat::ShouldTransmitVoice() const
 	return true;
 }
 
-FString FWendyVoiceChat::GetDebugSpeakerNames() const
+FString FWendyVoiceChat::GetActiveSpeakerNames() const
 {
-	FScopeLock SpeakerNamesLock(&DebugSpeakerNamesMutex);
-	return DebugSpeakerNames;
+	FScopeLock SpeakerNamesLock(&ActiveSpeakerNamesMutex);
+	return ActiveSpeakerNames;
 }
 
 void FWendyVoiceChat::InitVoice(const FWendyWorldConnectingInfo& InConnectingInfo)
@@ -299,7 +342,7 @@ void FWendyVoiceChat::InitVoice(const FWendyWorldConnectingInfo& InConnectingInf
 		return;
 	}
 
-	QueryCaptureDeviceName();
+	QueryMicrophoneDeviceName();
 
 	// Empty device name = system default input device.
 	VoiceCapture = FVoiceModule::Get().CreateVoiceCapture(FString(), WENDY_VOICE_SAMPLE_RATE, WENDY_VOICE_NUM_CHANNELS);
@@ -414,6 +457,20 @@ void FWendyVoiceChat::UpdateTick()
 		uint32 DiscardAvailable = 0;
 		VoiceCapture->GetVoiceData(RawCaptureScratch.GetData(), RawCaptureScratch.Num(), DiscardAvailable);
 		CaptureAccumulator.Reset();
+
+		// Same reasoning in the other direction: discard anything that arrives while we're switched off,
+		// otherwise re-enabling would play out whatever had piled up in the socket as a burst of stale audio.
+		if (VoiceSocket != nullptr && RecvFromAddr.IsValid())
+		{
+			int32 DiscardLoopLimit = 64;
+			int32 DiscardedBytes = 0;
+			while (DiscardLoopLimit-- > 0
+				&& VoiceSocket->RecvFrom(DatagramScratch.GetData(), DatagramScratch.Num(), DiscardedBytes, *RecvFromAddr)
+				&& DiscardedBytes > 0)
+			{
+			}
+		}
+
 		UpdateDebugCountersPerSecond();
 		return;
 	}
@@ -423,7 +480,7 @@ void FWendyVoiceChat::UpdateTick()
 	PollCapturedAudio();
 
 	const bool bShouldTransmit = ShouldTransmitVoice();
-	DebugTransmitting.Set(bShouldTransmit ? 1 : 0);
+	
 
 	// Encode every whole frame we now have, then drop them all in one go (cheaper than shifting per frame).
 	// While gated we still consume the samples rather than letting a backlog build up and burst later.
@@ -826,8 +883,8 @@ void FWendyVoiceChat::UpdateDebugCountersPerSecond()
 				}
 			}
 
-			FScopeLock SpeakerNamesLock(&DebugSpeakerNamesMutex);
-			DebugSpeakerNames = (SpeakerNames.Num() > 0) ? FString::Join(SpeakerNames, TEXT(", ")) : TEXT("-");
+			FScopeLock SpeakerNamesLock(&ActiveSpeakerNamesMutex);
+			ActiveSpeakerNames = (SpeakerNames.Num() > 0) ? FString::Join(SpeakerNames, TEXT(", ")) : TEXT("-");
 		}
 
 		// The mixer counts underruns cumulatively on the audio thread; publish the per-second delta.
