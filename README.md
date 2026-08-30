@@ -14,6 +14,9 @@ Some textures are surely missing but that won't be a big problem for the least f
 
 --------------------------------
 
+2026.08.30
+Basic voice chat support
+
 2026.07.05
 Now I am working with Claude Code for further improvement of Wendy.
 
