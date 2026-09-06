@@ -5,6 +5,19 @@
 #include "CoreMinimal.h"
 #include "WendyCommon.h"
 
+/** Image-packet wire format switches. Image replication is the most sensitive part of Wendy, so like
+ * WD_DECOUPLED_IMAGE_SEND these default OFF and can be A/B'd independently.
+ *
+ * 0 = every image packet is sent at the full struct size, even when it carries fewer pixels than the
+ *     fixed ImageData array can hold (the original behaviour).
+ * 1 = a packet is only as long as the pixels it actually carries. The receiving side takes the packet
+ *     length from the header on the wire instead of assuming the local struct size.
+ *
+ * This is a prerequisite for WD_COMPRESSED_IMAGE_PACKET: a compressed payload is variable length by
+ * definition, so the framing has to stop assuming a fixed size first. On its own it also trims the
+ * partially-filled packet produced at each wrap-around of the image. */
+#define WD_VARIABLE_SIZE_IMAGE_PACKET 1
+
 enum class EWendyImageRepPacketType : uint8
 {
 	WIRP_USERINFO,

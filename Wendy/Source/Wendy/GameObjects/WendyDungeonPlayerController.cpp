@@ -193,7 +193,7 @@ bool AWendyDungeonPlayerController::InputKey(const FInputKeyEventArgs& Params)
 	}
 
 	EWendyRemoteInputKeys CapturedKey = EWendyRemoteInputKeys::None;
-	if (IsVoicePushToTalkKey(Params.Key))
+	if (FWendyVoiceChat::IsPushToTalkEnabled() && IsVoicePushToTalkKey(Params.Key))
 	{
 		// Push-to-talk is a purely LOCAL control, so CapturedKey is deliberately left as None: were it
 		// forwarded, holding it in focus mode would also type into whoever's desktop we are driving.

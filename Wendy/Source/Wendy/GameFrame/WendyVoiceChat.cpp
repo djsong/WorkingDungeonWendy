@@ -286,6 +286,11 @@ FString FWendyVoiceChat::GetPlaybackDeviceName(const UObject* InWorldContextObje
 	return TEXT("(unknown)");
 }
 
+bool FWendyVoiceChat::IsPushToTalkEnabled()
+{
+	return (CVarWdVoicePushToTalk.GetValueOnAnyThread() > 0);
+}
+
 bool FWendyVoiceChat::IsMicrophoneActive() const
 {
 	return bVoiceInitialized && ShouldTransmitVoice();
@@ -310,7 +315,7 @@ bool FWendyVoiceChat::ShouldTransmitVoice() const
 
 	// Open mic transmits whenever the capture hands us audio; the engine's silence detection has already
 	// decided that is worth sending. Push-to-talk adds the extra requirement of holding the key.
-	if (CVarWdVoicePushToTalk.GetValueOnAnyThread() > 0)
+	if (IsPushToTalkEnabled())
 	{
 		return PushToTalkActive.GetValue() != 0;
 	}

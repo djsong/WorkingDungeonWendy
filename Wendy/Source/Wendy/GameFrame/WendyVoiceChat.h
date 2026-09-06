@@ -127,6 +127,8 @@ public:
 	void SetPushToTalkActive(bool bInActive) { PushToTalkActive.Set(bInActive ? 1 : 0); }
 	bool IsPushToTalkActive() const { return PushToTalkActive.GetValue() != 0; }
 
+	static bool IsPushToTalkEnabled(); // Checking for simple system setting, not current state.
+
 	////////////////////////////////////////////////////////////////////////
 	// Voice chat status, for the HUD as well as diagnostics.
 
