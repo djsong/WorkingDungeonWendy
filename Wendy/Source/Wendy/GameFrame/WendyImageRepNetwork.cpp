@@ -644,7 +644,10 @@ bool FWendyImageRepNetwork::WrappedRecvAction_ImageData(uint8* RecvBuffer, uint3
 	{		
 		FString ImageOwnerId;
 		FWendyDesktopImageReplicateInfo ImageReplicateInfo;
-		ImagePacket.ToReplicateInfo(ImageOwnerId, ImageReplicateInfo);
+		// Still returns true either way: the packet was consumed from the recv buffer, so the drain must carry
+		// on to the next one. Only the staging of this bunch is skipped, leaving that region of the image on
+		// its previous pixels until a later update corrects it.
+		if (ImagePacket.ToReplicateInfo(ImageOwnerId, ImageReplicateInfo))
 		{
 			FScopeLock ImageLock(&ImageDataAccessMutex);
 			TArray<FWendyDesktopImageReplicateInfo>& ReplicateInfoArrayRef = RecvStagingReplicateInfo.FindOrAdd(ImageOwnerId);

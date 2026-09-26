@@ -18,6 +18,20 @@
  * partially-filled packet produced at each wrap-around of the image. */
 #define WD_VARIABLE_SIZE_IMAGE_PACKET 1
 
+/** 0 = pixels travel raw (3 bytes each).
+ * 1 = each bunch's pixels are LZ4 compressed before sending, and a per-packet flag says whether the payload
+ *     actually ended up compressed - a bunch that doesn't compress (photographic content, noise) is sent raw
+ *     rather than slightly larger.
+ *
+ * Bandwidth is the measured bottleneck, not CPU, so trading compress/decompress work for fewer bytes is the
+ * right direction here. Expect a lot on flat UI and text and very little on photos or video: LZ4 works within
+ * one bunch (~1 KB), which is a small window, so ratios are well short of whole-frame compression. */
+#define WD_COMPRESSED_IMAGE_PACKET 1
+
+#if WD_COMPRESSED_IMAGE_PACKET && !WD_VARIABLE_SIZE_IMAGE_PACKET
+	#error WD_COMPRESSED_IMAGE_PACKET needs WD_VARIABLE_SIZE_IMAGE_PACKET: a compressed payload is variable length, so the framing must stop assuming a fixed packet size first.
+#endif
+
 enum class EWendyImageRepPacketType : uint8
 {
 	WIRP_USERINFO,
@@ -37,11 +51,25 @@ struct FWendyImageRepPacketBase
 {
 	FWendyImageRepPacketBase(EWendyImageRepPacketType InPacketId, uint32 InPacketSizeBytes)
 		: PacketID(InPacketId)
+#if WD_COMPRESSED_IMAGE_PACKET
+		, bCompressedPayload(0)
+#endif
 		, PacketSizeBytes(InPacketSizeBytes)
 	{
 	}
 
 	EWendyImageRepPacketType PacketID;
+
+#if WD_COMPRESSED_IMAGE_PACKET
+	/** 1 when this packet's payload is an LZ4 blob rather than raw bytes. Decided per packet, because some
+	 * bunches don't compress and are better sent raw.
+	 *
+	 * Deliberately placed here: PacketID is one byte and PacketSizeBytes wants 4-byte alignment, so the base
+	 * already carried 3 bytes of padding. Living in that padding means enabling compression changes no
+	 * packet's size and shifts no field offset - see the static_asserts below that hold us to that. */
+	uint8 bCompressedPayload;
+#endif
+
 	uint32 PacketSizeBytes;
 
 	static int32 GetPacketHeaderSize()
@@ -114,8 +142,19 @@ struct FWendyImageRepPacket_ImageData : public FWendyImageRepPacketBase
 	uint32 CalculatePacketSizeBytes() const;
 
 	void FromReplicateInfo(const FString& InImageOwnerId, const FWendyDesktopImageReplicateInfo& ImageReplicateInfo);
-	void ToReplicateInfo(FString& OutImageOwnerId, FWendyDesktopImageReplicateInfo& OutImageReplicateInfo) const;
+
+	/** False means this packet couldn't be turned back into pixels (only possible when the payload arrived
+	 * compressed and failed to decompress); the caller should drop it rather than apply garbage. */
+	bool ToReplicateInfo(FString& OutImageOwnerId, FWendyDesktopImageReplicateInfo& OutImageReplicateInfo) const;
 };
+
+/** WENDY_IMAGE_PACKET_DATA_ARRAY_SIZE is derived from a hard-coded 42-byte prefix, so that number has to keep
+ * matching where ImageData actually starts. It was an unchecked assumption; these hold it to the compiler.
+ * The compression flag above is only free because it fits in padding, which is exactly what this catches. */
+static_assert(STRUCT_OFFSET(FWendyImageRepPacket_ImageData, ImageData) == 42,
+	"ImageData no longer starts 42 bytes in - update the 42 in WENDY_IMAGE_PACKET_DATA_ARRAY_SIZE to match.");
+static_assert(sizeof(FWendyImageRepPacket_ImageData) <= MAX_PACKET_SIZE,
+	"FWendyImageRepPacket_ImageData outgrew MAX_PACKET_SIZE.");
 
 
 struct FWendyImageRepPacket_RemoteInput : public FWendyImageRepPacketBase
