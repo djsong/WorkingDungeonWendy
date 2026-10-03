@@ -58,7 +58,7 @@ static TAutoConsoleVariable<float> CVarWdOutputTextureUpdatePeriod_RandFrac(
 
 static TAutoConsoleVariable<float> CVarWdDesktopCaptureBasePeriod(
 	TEXT("wd.DesktopCaptureBasePeriod"),
-	0.1f,
+	0.05f,
 	TEXT("A base interval to capture the desktop image, the first and fundamental step to acqure desktop image.")
 	TEXT("Having this interval variable means that image capturing is not incremental."),
 	ECVF_Default);
@@ -519,16 +519,33 @@ void UWendyDesktopImageComponent::ExtractReplicateInfo(FWendyDesktopImageReplica
 			OutReplicateInfo.UpdateElemNum -= RepImageIndexOver;
 		}
 
-		for (int32 RDI = 0; RDI < OutReplicateInfo.UpdateElemNum; ++RDI)
+		// Raw pointers rather than TArray::operator[]: that range-checks on every access outside Shipping,
+		// and this loop runs for ~every pixel of the image several times a second on the GAME thread, so the
+		// checks alone were costing tens of millions of branches per second. Bounds are already established
+		// by the clamping above, so checking per pixel buys nothing.
+		const FColor* RESTRICT SrcPtr = SourceImageData.GetData() + OutReplicateInfo.UpdateBeginIndex;
+		FWendyReplicatedColor* RESTRICT DstPtr = OutReplicateInfo.ImageData.GetData();
+		// Clamped at zero deliberately: the wrap-around arithmetic above can drive UpdateElemNum negative when
+		// SourceImageData is empty (before the first capture). The old loop just didn't iterate in that case,
+		// but the tail memzero below would compute a size larger than the buffer, so pin it here.
+		const int32 CopyElemNum = FMath::Max(OutReplicateInfo.UpdateElemNum, 0);
+
+		for (int32 RDI = 0; RDI < CopyElemNum; ++RDI)
 		{
-			const int32 SDI = OutReplicateInfo.UpdateBeginIndex + RDI;
+			// Can't memcpy: FColor is 4 bytes (incl. A) and FWendyReplicatedColor is 3.
+			DstPtr[RDI].R = SrcPtr[RDI].R;
+			DstPtr[RDI].G = SrcPtr[RDI].G;
+			DstPtr[RDI].B = SrcPtr[RDI].B;
+		}
 
-			const FColor SrcColor = SourceImageData[SDI];
-			FWendyReplicatedColor& RepColorRef = OutReplicateInfo.ImageData[RDI];
-
-			RepColorRef.R = SrcColor.R;
-			RepColorRef.G = SrcColor.G;
-			RepColorRef.B = SrcColor.B;
+		// The caller now reuses one buffer across bunches instead of allocating a freshly zeroed one each
+		// time, so clear any tail beyond what we just wrote. Diff mode compares the WHOLE ImageData array,
+		// and without this a leftover tail from the previous bunch could make an unchanged region look
+		// changed. Only costs anything on the one bunch per pass that wraps past the end of the image.
+		const int32 TailElemNum = OutReplicateInfo.ImageData.Num() - CopyElemNum;
+		if (TailElemNum > 0)
+		{
+			FMemory::Memzero(DstPtr + CopyElemNum, TailElemNum * sizeof(FWendyReplicatedColor));
 		}
 
 		//bDirtyForReplication = false;
@@ -537,19 +554,32 @@ void UWendyDesktopImageComponent::ExtractReplicateInfo(FWendyDesktopImageReplica
 
 void UWendyDesktopImageComponent::SetFromReplicateInfo(const FWendyDesktopImageReplicateInfo& InReplicateInfo)
 {
-	const int32 FinalReplicatDataNum = FMath::Min(InReplicateInfo.ImageData.Num(), InReplicateInfo.UpdateElemNum);
+	int32 FinalReplicatDataNum = FMath::Min(InReplicateInfo.ImageData.Num(), InReplicateInfo.UpdateElemNum);
+
+	// Clamp the write range ONCE instead of asking IsValidIndex per pixel. Same effect - the old loop simply
+	// skipped out-of-range pixels, and since they're a contiguous tail, clamping the count drops exactly the
+	// same ones. A negative begin index would be out of contract, but bail rather than walk backwards.
+	const int32 WriteBeginIndex = InReplicateInfo.UpdateBeginIndex;
+	if (WriteBeginIndex < 0)
+	{
+		return;
+	}
+	FinalReplicatDataNum = FMath::Min(FinalReplicatDataNum, SourceImageData.Num() - WriteBeginIndex);
+	if (FinalReplicatDataNum <= 0)
+	{
+		return;
+	}
+
+	// Raw pointers for the same reason as the extract path: this runs on the game thread for every received
+	// pixel, and the per-access range checks were pure overhead once the range is known good.
+	const FWendyReplicatedColor* RESTRICT SrcPtr = InReplicateInfo.ImageData.GetData();
+	FColor* RESTRICT DstPtr = SourceImageData.GetData() + WriteBeginIndex;
 
 	for (int32 RDI = 0; RDI < FinalReplicatDataNum; ++RDI)
 	{
-		const int32 SourceImageDataIdx = InReplicateInfo.UpdateBeginIndex + RDI;
-		if (SourceImageData.IsValidIndex(SourceImageDataIdx))
-		{
-			const FWendyReplicatedColor RepColor = InReplicateInfo.ImageData[RDI];
-			FColor& DataRef = SourceImageData[SourceImageDataIdx];
-			DataRef.R = RepColor.R;
-			DataRef.G = RepColor.G;
-			DataRef.B = RepColor.B;
-		}
+		DstPtr[RDI].R = SrcPtr[RDI].R;
+		DstPtr[RDI].G = SrcPtr[RDI].G;
+		DstPtr[RDI].B = SrcPtr[RDI].B;
 	}
 	if (FinalReplicatDataNum > 0)
 	{

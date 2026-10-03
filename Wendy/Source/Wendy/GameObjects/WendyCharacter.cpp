@@ -516,11 +516,18 @@ void AWendyCharacter::UpdateDesktopImageReplication()
 					int32 ExtractAndSendSimpleLoopNum = 0;
 					const int32 ExtractAndSendMaxNum = CVarWdDesktopImageReplicateBunchNum.GetValueOnGameThread();
 					const int32 IterateMax = CVarWdDesktopImageExtractItorNum.GetValueOnGameThread();
+
+					// Declared OUTSIDE the loop and sized once. It used to be constructed per iteration, which
+					// meant a heap allocation for every bunch - tens of thousands per second on the game thread,
+					// for a buffer of identical size every time. Reuse is safe because everything downstream
+					// (the staging push, and the diff-mode last-sent record) takes its own copy, and
+					// ExtractReplicateInfo overwrites the used range then zeroes the tail.
+					FWendyDesktopImageReplicateInfo LocalReplicateInfo;
+					LocalReplicateInfo.ImageData.AddZeroed(GetWdDesktopImageReplicateElemSize());
+
 					while(ExtractAndSendNum < ExtractAndSendMaxNum)
 					//for (int32 RepIdx = 0; RepIdx < CVarWdDesktopImageReplicateBunchNum.GetValueOnGameThread(); ++RepIdx)
 					{
-						FWendyDesktopImageReplicateInfo LocalReplicateInfo;
-						LocalReplicateInfo.ImageData.AddZeroed(GetWdDesktopImageReplicateElemSize());
 						DesktopImageComponent->ExtractReplicateInfo(LocalReplicateInfo);
 
 						if (IsUpdatedImageRepInfo(LocalReplicateInfo) || (false == IsImageReplicateDiffMode()))
