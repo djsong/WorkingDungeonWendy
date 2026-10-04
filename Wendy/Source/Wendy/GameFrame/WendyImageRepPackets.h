@@ -79,7 +79,11 @@ struct FWendyImageRepPacketBase
 	}
 
 
-	bool SerializeToSendBuffer(uint8* OutSendBuffer, uint32& InOutSendBufferPointer);
+	/** InMaxUsableBytes caps how far into SendBuffer this packet is allowed to write. Bulk image data passes a
+	 * limit BELOW the buffer size so a reserve is always left for small latency-critical packets (remote
+	 * input, user info), which have no requeue and are simply dropped if they don't fit. Control traffic
+	 * passes the full buffer size. */
+	bool SerializeToSendBuffer(uint8* OutSendBuffer, uint32& InOutSendBufferPointer, uint32 InMaxUsableBytes);
 
 	/** Assumes PacketSizeBytes is already calculated before get to here.
 	 * Reads the next packet from the unread region [InOutRecvBufferReadOffset, InRecvBufferPointer) of InRecvBuffer.

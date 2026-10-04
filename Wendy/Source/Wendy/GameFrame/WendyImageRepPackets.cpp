@@ -22,10 +22,10 @@ static TAutoConsoleVariable<int32> CVarWdDesktopImageCompressionStats(
 	ECVF_Default);
 #endif
 
-bool FWendyImageRepPacketBase::SerializeToSendBuffer(uint8* OutSendBuffer, uint32& InOutSendBufferPointer)
+bool FWendyImageRepPacketBase::SerializeToSendBuffer(uint8* OutSendBuffer, uint32& InOutSendBufferPointer, uint32 InMaxUsableBytes)
 {
 	// If over, wait until some buffered data get sent.
-	if (InOutSendBufferPointer + PacketSizeBytes < RECEIVE_SEND_BUFFER_SIZE)
+	if (InOutSendBufferPointer + PacketSizeBytes < FMath::Min(InMaxUsableBytes, static_cast<uint32>(RECEIVE_SEND_BUFFER_SIZE)))
 	{
 		FMemory::Memcpy(OutSendBuffer + InOutSendBufferPointer, reinterpret_cast<uint8*>(this), PacketSizeBytes);
 		InOutSendBufferPointer += PacketSizeBytes;

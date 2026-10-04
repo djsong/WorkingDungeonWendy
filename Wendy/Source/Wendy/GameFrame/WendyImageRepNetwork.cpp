@@ -23,6 +23,16 @@ static TAutoConsoleVariable<int32> CVarWdImageRepNetworkClientRecvMaxLoop(
 	TEXT("Client need some recv loop to get data of multiple clients, but it might better if each client knows the number of other clients in network thread."),
 	ECVF_ReadOnly);
 
+static TAutoConsoleVariable<int32> CVarWdImageRepControlReserveBytes(
+	TEXT("wd.ImageRepNetwork.ControlReserveBytes"),
+	65536,
+	TEXT("Bytes at the end of each connection's SendBuffer that bulk image data may NOT use, kept free for small")
+	TEXT(" latency-critical packets (remote input, user info). Those go through a path with no requeue, so when")
+	TEXT(" the image stream fills the shared buffer they are DROPPED outright - which shows up as remote control")
+	TEXT(" going unresponsive while the image keeps flowing. Image data requeues instead, so holding some back")
+	TEXT(" costs it nothing. Set 0 to restore the old behaviour where image data could claim the whole buffer."),
+	ECVF_Default);
+
 static TAutoConsoleVariable<float> CVarWdImageRepNetworkCursorMoveSendInterval(
 	TEXT("wd.ImageRepNetwork.CursorMoveSendInterval"),
 	0.1f,
@@ -90,7 +100,7 @@ void FWendyImageRepNetwork::InitAndOpenConnection()
 				UserInfoPacket.FromUserIdStr(SelfIdentification);
 
 
-				if (UserInfoPacket.SerializeToSendBuffer(ConnectionBase.SendBuffer, ConnectionBase.SendBufferPointer))
+				if (UserInfoPacket.SerializeToSendBuffer(ConnectionBase.SendBuffer, ConnectionBase.SendBufferPointer, RECEIVE_SEND_BUFFER_SIZE))
 				{
 					// It will be sent just once here, so make sure it is being sent.
 					int32 SentTryLimit = 100;
@@ -550,6 +560,46 @@ void FWendyImageRepNetwork::ConsumeRemoteInputInfo(TArray<FWendyMonitorHitAndInp
 	}
 }
 
+#if WD_REMOVE_ME_AFTER_TEST
+int64 GRecvByteAccumSecond = 0;
+double GRecvByteAccumCountedLastTime = 0.0;
+void CountAndDisplayRecv(int32 RecvByte)
+{
+	GRecvByteAccumSecond += RecvByte;
+	double CurrTime = FPlatformTime::Seconds();
+	if (CurrTime - GRecvByteAccumCountedLastTime > 1.0)
+	{
+		extern bool IsImageReplicateDiffMode();
+		const FString LogMsg = FString::Printf(TEXT("CountAndDisplayRecv %lld / sec"), GRecvByteAccumSecond);
+
+		const uint64 MessageKey = 63534634;
+		GEngine->AddOnScreenDebugMessage(MessageKey, 2.0f, FColor::Cyan, LogMsg);
+
+		GRecvByteAccumSecond = 0;
+		GRecvByteAccumCountedLastTime = CurrTime;
+	}
+}
+
+int64 GSendByteAccumSecond = 0;
+double GSendByteAccumCountedLastTime = 0.0;
+void CountAndDisplaySend(int32 SendByte)
+{
+	GSendByteAccumSecond += SendByte;
+	double CurrTime = FPlatformTime::Seconds();
+	if (CurrTime - GSendByteAccumCountedLastTime > 1.0)
+	{
+		extern bool IsImageReplicateDiffMode();
+		const FString LogMsg = FString::Printf(TEXT("CountAndDisplaySend %lld / sec"), GSendByteAccumSecond);
+
+		const uint64 MessageKey = 847245623;
+		GEngine->AddOnScreenDebugMessage(MessageKey, 2.0f, FColor::Magenta, LogMsg);
+
+		GSendByteAccumSecond = 0;
+		GSendByteAccumCountedLastTime = CurrTime;
+	}
+}
+#endif
+
 bool FWendyImageRepNetwork::RawRecvAction(FSocket* InSocket, FInternetAddr& InAddr, uint8* RecvBuffer, uint32& RecvBufferPointer)
 {
 	constexpr int32 INTERNAL_BUFFER_SIZE = MAX_PACKET_SIZE;
@@ -560,6 +610,10 @@ bool FWendyImageRepNetwork::RawRecvAction(FSocket* InSocket, FInternetAddr& InAd
 	{
 		if (ActualBytesRead > 0)
 		{
+#if WD_REMOVE_ME_AFTER_TEST
+			CountAndDisplayRecv(ActualBytesRead);
+#endif
+
 			FMemory::Memcpy(RecvBuffer + RecvBufferPointer, RawRecvBuffer, ActualBytesRead);
 			RecvBufferPointer += ActualBytesRead;
 			ensureMsgf(RecvBufferPointer < RECEIVE_SEND_BUFFER_SIZE, TEXT("There's no guarantee but how come actually got this far?"));
@@ -585,6 +639,10 @@ bool FWendyImageRepNetwork::RawSendAction(FSocket* InSocket, FInternetAddr& InAd
 	{
 		if (ActualBytesSent > 0)
 		{
+#if WD_REMOVE_ME_AFTER_TEST
+			CountAndDisplaySend(ActualBytesSent);
+#endif
+
 			// A well-behaved socket never reports more sent than we asked (SendBufferPointer), so this clamp is
 			// normally a no-op. But SendBufferPointer is unsigned, so clamp defensively: without it, a bogus
 			// over-report would underflow SendBufferPointer to a huge value (and drive a wild Memmove).
@@ -604,8 +662,17 @@ bool FWendyImageRepNetwork::RawSendAction(FSocket* InSocket, FInternetAddr& InAd
 
 bool FWendyImageRepNetwork::WrappedSendAction(FWendyImageRepPacketBase* SendPacket, FSocket* InSocket, FInternetAddr& InAddr, uint8* SendBuffer, uint32& SendBufferPointer)
 {
-	if (SendPacket->SerializeToSendBuffer(SendBuffer, SendBufferPointer))
+	if (SendPacket->SerializeToSendBuffer(SendBuffer, SendBufferPointer, RECEIVE_SEND_BUFFER_SIZE))
 	{
+#if WD_DECOUPLED_IMAGE_SEND
+		// Append, push once, don't wait. The loop in the #else below keeps going until the WHOLE buffer is
+		// empty, sleeping 1ms every 10th attempt - fine when this was the only sender and the buffer held one
+		// packet, but with the image stream keeping ~1MB queued it means every remote-input send (one per tick
+		// in focus mode) stalls the network thread for 10ms+ trying to flush a megabyte synchronously, which
+		// starves the image stream AND the very input we're sending. The per-tick drain already empties the
+		// buffer at the socket's own rate, so there is nothing to gain by blocking here.
+		DrainSendBufferNonBlocking(InSocket, InAddr, SendBuffer, SendBufferPointer);
+#else
 		int32 SendTryLimit = 100;
 		while (SendTryLimit-- > 0)
 		{
@@ -626,6 +693,7 @@ bool FWendyImageRepNetwork::WrappedSendAction(FWendyImageRepPacketBase* SendPack
 				break;
 			}
 		}
+#endif
 		return true;
 	}
 	else
@@ -708,6 +776,15 @@ void FWendyImageRepNetwork::FeedConnectionFromStaging(FWendyBoundSocketAndReleva
 	//    what we queue gives fair coverage (the game-thread producer round-robins regions, so no send cursor
 	//    is needed). If the buffer is still full after a flush, the socket is congested this tick: stop and
 	//    keep the remaining regions pending (requeue, never drop).
+	// Leave a reserve at the top of SendBuffer that only control traffic may use. Image data requeues when it
+	// can't fit (it stays pending and goes next tick), whereas remote input is dropped outright - so without
+	// this the image stream starves your keyboard and mouse out of the shared buffer.
+	const uint32 SendBufferBytes = static_cast<uint32>(RECEIVE_SEND_BUFFER_SIZE);
+	const uint32 ControlReserveBytes = static_cast<uint32>(FMath::Max(CVarWdImageRepControlReserveBytes.GetValueOnAnyThread(), 0));
+	const uint32 ImageUsableBufferBytes = (ControlReserveBytes < SendBufferBytes)
+		? (SendBufferBytes - ControlReserveBytes)
+		: SendBufferBytes;
+
 	bool bSocketCongested = false;
 	for (auto& OwnerPendingPair : Conn.PendingSendByOwnerRegion)
 	{
@@ -723,11 +800,11 @@ void FWendyImageRepNetwork::FeedConnectionFromStaging(FWendyBoundSocketAndReleva
 			FWendyImageRepPacket_ImageData ImagePacket;
 			ImagePacket.FromReplicateInfo(OwnerId, OwnerPending[Region]);
 
-			if (!ImagePacket.SerializeToSendBuffer(Conn.SendBuffer, Conn.SendBufferPointer))
+			if (!ImagePacket.SerializeToSendBuffer(Conn.SendBuffer, Conn.SendBufferPointer, ImageUsableBufferBytes))
 			{
 				// SendBuffer full: flush it in bulk to make room, then try this region once more.
 				DrainSendBufferNonBlocking(Conn.SocketPtr, *Conn.BoundAddr.Get(), Conn.SendBuffer, Conn.SendBufferPointer);
-				if (!ImagePacket.SerializeToSendBuffer(Conn.SendBuffer, Conn.SendBufferPointer))
+				if (!ImagePacket.SerializeToSendBuffer(Conn.SendBuffer, Conn.SendBufferPointer, ImageUsableBufferBytes))
 				{
 					// Still no room even after flushing: the socket can't keep up this tick.
 					bSocketCongested = true;
