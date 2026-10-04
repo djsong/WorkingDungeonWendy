@@ -24,6 +24,8 @@ const int32 RECEIVE_SEND_BUFFER_SIZE = MAX_PACKET_SIZE * 1000;
  * Keep at 0 by default so normal builds work over the network; flip to 1 to test/debug the decoupled path. */
 #define WD_DECOUPLED_IMAGE_SEND 1
 
+#define WD_REMOVE_ME_AFTER_TEST 0
+
 /** Just a bunch */
 struct FWendyBoundSocketAndRelevantInfo
 {
