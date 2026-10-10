@@ -5,8 +5,7 @@
 #include "CoreMinimal.h"
 #include "WendyCommon.h"
 
-/** Image-packet wire format switches. Image replication is the most sensitive part of Wendy, so like
- * WD_DECOUPLED_IMAGE_SEND these default OFF and can be A/B'd independently.
+/** Image-packet wire format switches. Image replication is the most sensitive part of Wendy.
  *
  * 0 = every image packet is sent at the full struct size, even when it carries fewer pixels than the
  *     fixed ImageData array can hold (the original behaviour).

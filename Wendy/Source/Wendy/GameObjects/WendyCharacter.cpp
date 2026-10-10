@@ -500,6 +500,10 @@ void AWendyCharacter::UpdateDesktopImageReplication()
 			// If false, it uses RPC. Server if true, Client if false. 
 			//const bool bUsedReplication= (GetLocalRole() == ROLE_Authority);
 
+#if WD_IMAGE_REP_PERF_CHECK
+			int32 CheckSetSendImageInfoNum = 0, CheckExtractIterNum = 0;
+#endif
+
 			if ((CurrRT - LastDesktopImageRepDirtyTime >= GetWdDesktopImageRepExtractInterval()))
 			{
 				// Now we won't even use Unreal replication for this..
@@ -509,9 +513,6 @@ void AWendyCharacter::UpdateDesktopImageReplication()
 					&& (ConnectedUserAccountInfo.UserId.Len() > 0)
 					)
 				{
-#if WENDY_IMAGE_SEND_STAGING_BUNCH
-					TArray<FWendyDesktopImageReplicateInfo> ExtractedImageInfos;
-#endif
 					int32 ExtractAndSendNum = 0;
 					int32 ExtractAndSendSimpleLoopNum = 0;
 					const int32 ExtractAndSendMaxNum = CVarWdDesktopImageReplicateBunchNum.GetValueOnGameThread();
@@ -526,24 +527,26 @@ void AWendyCharacter::UpdateDesktopImageReplication()
 					LocalReplicateInfo.ImageData.AddZeroed(GetWdDesktopImageReplicateElemSize());
 
 					while(ExtractAndSendNum < ExtractAndSendMaxNum)
-					//for (int32 RepIdx = 0; RepIdx < CVarWdDesktopImageReplicateBunchNum.GetValueOnGameThread(); ++RepIdx)
 					{
 						DesktopImageComponent->ExtractReplicateInfo(LocalReplicateInfo);
 
 						if (IsUpdatedImageRepInfo(LocalReplicateInfo) || (false == IsImageReplicateDiffMode()))
 						{
-#if WENDY_IMAGE_SEND_STAGING_BUNCH		
-							ExtractedImageInfos.Add(LocalReplicateInfo);
-#else
 							WdGameInst->SetSendImageInfo(ConnectedUserAccountInfo.UserId, LocalReplicateInfo);
-#endif
 							if (IsImageReplicateDiffMode())
 							{
 								UpdateLastSentWholeImageRepInfo(LocalReplicateInfo);
 							}
 
 							++ExtractAndSendNum;
+#if WD_IMAGE_REP_PERF_CHECK
+							++CheckSetSendImageInfoNum;
+#endif
 						}
+
+#if WD_IMAGE_REP_PERF_CHECK
+						++CheckExtractIterNum;
+#endif
 
 						// In diff mode, almost nothing might be sent when the displayed image is in static state, 
 						// then this loop can be infinite, so put some safety measure.
@@ -552,13 +555,13 @@ void AWendyCharacter::UpdateDesktopImageReplication()
 							break;
 						}
 					}
-#if WENDY_IMAGE_SEND_STAGING_BUNCH
-					WdGameInst->SetSendImageInfo(ConnectedUserAccountInfo.UserId, ExtractedImageInfos);						
-#endif
 				}
 
 				LastDesktopImageRepDirtyTime = CurrRT;
 			}
+#if WD_IMAGE_REP_PERF_CHECK
+			UE_LOG(LogWendy, Verbose, TEXT("UpdateDesktopImageReplication Send / ExtractIter (%d / %d)"), CheckSetSendImageInfoNum, CheckExtractIterNum);
+#endif
 		}
 		
 		if (false == IsLocallyControlled())

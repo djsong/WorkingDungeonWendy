@@ -265,8 +265,7 @@ void FWendyImageRepNetwork::UpdateTickServer(float InDeltaSecond)
 
 	////////////////////
 	//// To send 
-		
-#if WD_DECOUPLED_IMAGE_SEND
+	
 	// Snapshot staging under the lock, then do the blocking socket I/O outside it so a
 	// congested client can't stall the game thread's SetSendImageInfo/ConsumeImageInfo (same mutex).
 	// MoveTemp is O(1): the member map is left empty and the game thread refills it for next tick.
@@ -284,42 +283,6 @@ void FWendyImageRepNetwork::UpdateTickServer(float InDeltaSecond)
 	{
 		FeedConnectionFromStaging(ConnectedClients[ClientIdx], LocalSendStaging);
 	}
-#else
-	{
-		FScopeLock ImageLock(&ImageDataAccessMutex);
-
-		for (int32 ClientIdx = 0; ClientIdx < ConnectedClients.Num(); ++ClientIdx)
-		{
-			FWendyBoundSocketAndRelevantInfo& ClientInfo = ConnectedClients[ClientIdx];
-
-			for (const auto& ItStagingRepInfo : SendStagingReplicateInfo)
-			{
-				// Omitting this check is not a big problem, then just sending its own data back again, won't be that pretty.
-				if (ItStagingRepInfo.Key == ClientInfo.UserIdentification)
-				{
-					continue;
-				}
-
-				const TArray<FWendyDesktopImageReplicateInfo>& ImageReplicateInfoForClient = ItStagingRepInfo.Value;
-				if (ImageReplicateInfoForClient.Num() > 0)
-				{
-					for (int32 RepIdx = 0; RepIdx < ImageReplicateInfoForClient.Num(); ++RepIdx)
-					{
-						FWendyImageRepPacket_ImageData ImagePacket;
-						ImagePacket.FromReplicateInfo(ItStagingRepInfo.Key, ImageReplicateInfoForClient[RepIdx]);
-						WrappedSendAction(&ImagePacket, ClientInfo.SocketPtr, *ClientInfo.BoundAddr.Get(), ClientInfo.SendBuffer, ClientInfo.SendBufferPointer);
-					}
-				}
-			}
-		}
-		// SendStagingReplicateInfo cannot be empty while sending above because one info might be sent to more than one client.
-		// Assume they are all sent as requested and clear them now.
-		for (auto& ItStagingRepInfo : SendStagingReplicateInfo)
-		{
-			ItStagingRepInfo.Value.Empty();
-		}
-	}
-#endif // WD_DECOUPLED_IMAGE_SEND
 
 	// Input data won't be that frequent like image data, so check its size first.
 	if(SendStagingRemoteInputInfo.Num() > 0)
@@ -439,7 +402,6 @@ void FWendyImageRepNetwork::UpdateTickClient(float InDeltaSecond)
 	}
 
 	//// To send
-#if WD_DECOUPLED_IMAGE_SEND
 	// Snapshot our own staging under the lock, then coalesce + feed outside it (same reasoning as the server block).
 	TMap<FString, TArray<FWendyDesktopImageReplicateInfo>> LocalSendStaging;
 	{
@@ -450,39 +412,11 @@ void FWendyImageRepNetwork::UpdateTickClient(float InDeltaSecond)
 	}
 
 	FeedConnectionFromStaging(ConnectionBase, LocalSendStaging);
-#else
-	{
-		FScopeLock ImageLock(&ImageDataAccessMutex);
-		ensureMsgf(SendStagingReplicateInfo.Num() <= 1, TEXT("Why client has more than its own data to send? %d"), SendStagingReplicateInfo.Num());
-		TArray<FWendyDesktopImageReplicateInfo>* MyImageDataToSend = SendStagingReplicateInfo.Find(SelfIdentification);
-		if(MyImageDataToSend != nullptr && MyImageDataToSend->Num() > 0)
-		{
-			for (int32 RepIdx = 0; RepIdx < MyImageDataToSend->Num(); ++RepIdx)
-			{
-				const FWendyDesktopImageReplicateInfo& SendImageReplicateInfo = (*MyImageDataToSend)[RepIdx];
-				FWendyImageRepPacket_ImageData ImagePacket;
-				ImagePacket.FromReplicateInfo(SelfIdentification, SendImageReplicateInfo);
-				WrappedSendAction(&ImagePacket, ConnectionBase.SocketPtr, *ConnectionBase.BoundAddr.Get(), ConnectionBase.SendBuffer, ConnectionBase.SendBufferPointer);
-			}
-		}
-
-		// Sent then empty.
-		for (auto& ItStagingRepInfo : SendStagingReplicateInfo)
-		{
-			ItStagingRepInfo.Value.Empty();
-		}
-	}
-#endif // WD_DECOUPLED_IMAGE_SEND
 
 	DisposeTooMuchStagingData();
 }
 
-void FWendyImageRepNetwork::SetSendImageInfo(const FString& ImageOwnerId, 
-#if WENDY_IMAGE_SEND_STAGING_BUNCH
-	const TArray<FWendyDesktopImageReplicateInfo>& ImageReplicateInfoToSend
-#else
-	const FWendyDesktopImageReplicateInfo& ImageReplicateInfoToSend
-#endif
+void FWendyImageRepNetwork::SetSendImageInfo(const FString& ImageOwnerId, const FWendyDesktopImageReplicateInfo& ImageReplicateInfoToSend
 )
 {
 	SCOPE_CYCLE_COUNTER(STAT_ImageRepNetworkSetSendImageInfo);
@@ -491,11 +425,7 @@ void FWendyImageRepNetwork::SetSendImageInfo(const FString& ImageOwnerId,
 		SCOPE_CYCLE_COUNTER(STAT_ImageRepNetworkSetSendImageInfoInner);
 		ensureMsgf(bIsServer || ImageOwnerId == SelfIdentification, TEXT("Any case that client (%s) send other (%s) client's data?"), *SelfIdentification, *ImageOwnerId);
 		TArray<FWendyDesktopImageReplicateInfo>& ReplicateInfoArrayRef = SendStagingReplicateInfo.FindOrAdd(ImageOwnerId);
-#if WENDY_IMAGE_SEND_STAGING_BUNCH
-		ReplicateInfoArrayRef.Append(ImageReplicateInfoToSend);
-#else
 		ReplicateInfoArrayRef.Add(ImageReplicateInfoToSend);
-#endif
 	}
 }
 
@@ -560,7 +490,7 @@ void FWendyImageRepNetwork::ConsumeRemoteInputInfo(TArray<FWendyMonitorHitAndInp
 	}
 }
 
-#if WD_REMOVE_ME_AFTER_TEST
+#if WD_COUNT_AND_DISPLAY_NETWORK_BYTES
 int64 GRecvByteAccumSecond = 0;
 double GRecvByteAccumCountedLastTime = 0.0;
 void CountAndDisplayRecv(int32 RecvByte)
@@ -610,7 +540,7 @@ bool FWendyImageRepNetwork::RawRecvAction(FSocket* InSocket, FInternetAddr& InAd
 	{
 		if (ActualBytesRead > 0)
 		{
-#if WD_REMOVE_ME_AFTER_TEST
+#if WD_COUNT_AND_DISPLAY_NETWORK_BYTES
 			CountAndDisplayRecv(ActualBytesRead);
 #endif
 
@@ -639,7 +569,7 @@ bool FWendyImageRepNetwork::RawSendAction(FSocket* InSocket, FInternetAddr& InAd
 	{
 		if (ActualBytesSent > 0)
 		{
-#if WD_REMOVE_ME_AFTER_TEST
+#if WD_COUNT_AND_DISPLAY_NETWORK_BYTES
 			CountAndDisplaySend(ActualBytesSent);
 #endif
 
@@ -664,7 +594,6 @@ bool FWendyImageRepNetwork::WrappedSendAction(FWendyImageRepPacketBase* SendPack
 {
 	if (SendPacket->SerializeToSendBuffer(SendBuffer, SendBufferPointer, RECEIVE_SEND_BUFFER_SIZE))
 	{
-#if WD_DECOUPLED_IMAGE_SEND
 		// Append, push once, don't wait. The loop in the #else below keeps going until the WHOLE buffer is
 		// empty, sleeping 1ms every 10th attempt - fine when this was the only sender and the buffer held one
 		// packet, but with the image stream keeping ~1MB queued it means every remote-input send (one per tick
@@ -672,28 +601,7 @@ bool FWendyImageRepNetwork::WrappedSendAction(FWendyImageRepPacketBase* SendPack
 		// starves the image stream AND the very input we're sending. The per-tick drain already empties the
 		// buffer at the socket's own rate, so there is nothing to gain by blocking here.
 		DrainSendBufferNonBlocking(InSocket, InAddr, SendBuffer, SendBufferPointer);
-#else
-		int32 SendTryLimit = 100;
-		while (SendTryLimit-- > 0)
-		{
-			if (RawSendAction(InSocket, InAddr, SendBuffer, SendBufferPointer))
-			{
-			}
-			else
-			{
-				// Well we gonna try next chance, but in this case we might give some slack..
-				if ((SendTryLimit % 10) == 0)
-				{
-					FPlatformProcess::Sleep(0.001f);
-				}
-			}
 
-			if (SendBufferPointer == 0)
-			{
-				break;
-			}
-		}
-#endif
 		return true;
 	}
 	else
@@ -730,7 +638,6 @@ bool FWendyImageRepNetwork::WrappedRecvAction_ImageData(uint8* RecvBuffer, uint3
 	}
 }
 
-#if WD_DECOUPLED_IMAGE_SEND
 void FWendyImageRepNetwork::DrainSendBufferNonBlocking(FSocket* InSocket, FInternetAddr& InAddr, uint8* SendBuffer, uint32& SendBufferPointer)
 {
 	// Keep pushing until the socket won't take any more right now, then return (no sleeping).
@@ -825,7 +732,6 @@ void FWendyImageRepNetwork::FeedConnectionFromStaging(FWendyBoundSocketAndReleva
 	// 4) Flush whatever we appended (the last, partially-filled buffer).
 	DrainSendBufferNonBlocking(Conn.SocketPtr, *Conn.BoundAddr.Get(), Conn.SendBuffer, Conn.SendBufferPointer);
 }
-#endif // WD_DECOUPLED_IMAGE_SEND
 
 void FWendyImageRepNetwork::DisposeTooMuchStagingData()
 {
@@ -915,13 +821,7 @@ void FWendyImageRepNetworkThreadWorker::Exit()
 }
 
 
-void FWendyImageRepNetworkThreadWorker::SetSendImageInfo(const FString& ImageOwnerId, 
-#if WENDY_IMAGE_SEND_STAGING_BUNCH
-	const TArray<FWendyDesktopImageReplicateInfo>& ImageReplicateInfoToSend
-#else
-	const FWendyDesktopImageReplicateInfo& ImageReplicateInfoToSend
-#endif
-)
+void FWendyImageRepNetworkThreadWorker::SetSendImageInfo(const FString& ImageOwnerId, const FWendyDesktopImageReplicateInfo& ImageReplicateInfoToSend)
 {
 	ImageRepNetwork.SetSendImageInfo(ImageOwnerId, ImageReplicateInfoToSend);
 }

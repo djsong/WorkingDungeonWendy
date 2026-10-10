@@ -95,12 +95,7 @@ FWendyVoiceMixerStatePtr UWendyGameInstance::GetVoiceMixerState() const
 	return VoiceChat != nullptr ? VoiceChat->GetMixerState() : nullptr;
 }
 
-void UWendyGameInstance::SetSendImageInfo(const FString& ImageOwnerId,
-#if WENDY_IMAGE_SEND_STAGING_BUNCH
-	const TArray<FWendyDesktopImageReplicateInfo>& ImageReplicateInfoToSend
-#else
-	const FWendyDesktopImageReplicateInfo& ImageReplicateInfoToSend
-#endif
+void UWendyGameInstance::SetSendImageInfo(const FString& ImageOwnerId, const FWendyDesktopImageReplicateInfo& ImageReplicateInfoToSend
 )
 {
 	if (ImageRepNetworkThreadWorker.IsValid())
