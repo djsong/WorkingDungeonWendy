@@ -96,7 +96,11 @@ UWendyDesktopImageComponent::UWendyDesktopImageComponent(const FObjectInitialize
 
 	LastReplicatedImageDataIndex = -1;
 
-	bDirtyForReplication = false;
+	// Starts dirty so the first pass definitely runs and sends the initial image. Starting clean would rely on
+	// the first capture happening to differ from the zero-filled buffer, which is true in practice but a poor
+	// thing to depend on.
+	bDirtyForReplication = true;
+	CleanReplicateWalkCount = 0;
 	bDirtyForTextureUpdate = false;
 	LastTextureUpdatedTime = 0.0;
 	TextureUpdatePeriodThisTime = 0.0f;
@@ -106,12 +110,7 @@ void UWendyDesktopImageComponent::TickComponent(float DeltaTime, enum ELevelTick
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
-	if (ShouldCaptureLocalImage() 
-		
-		// Is checking bDirtyForReplication necessary? and even proper when the staging size is not ensured to be the same as replicating size?
-		//&& bDirtyForReplication == false 
-		
-		)
+	if (ShouldCaptureLocalImage())
 	{
 		// Won't do the direct capturing job here. It will do some incremental converting..
 		UpdateLocalDesktopCaptureStaging();
@@ -307,6 +306,12 @@ void UWendyDesktopImageComponent::UpdateLocalDesktopCaptureStaging()
 	const FIntPoint SrcDesktopResolution = GetCachedDesktopResolution();
 	const FVector2D ImageStagingIndexStride = GetDesktopImageStagingStride();
 	const int32 StagingItorMaxNum = CVarWdDesktopImageStagingPixelsInOneTick.GetValueOnGameThread();
+
+	// Note this capture only stages a slice of the desktop per call (StagingItorMaxNum pixels), so "nothing
+	// changed" here means nothing changed in THIS slice - which is exactly right: the replication walk stays
+	// skipped until some slice actually brings in different pixels.
+	bool bAnyPixelChangedThisCapture = false;
+
 	for (int32 CountIndex = 0; CountIndex < StagingItorMaxNum; ++CountIndex)
 	{
 		// Not capturing all the pixels if desktop size is bigger than SourceImageData size, yes SourceImageData could be bigger, not much expected though.
@@ -374,13 +379,31 @@ void UWendyDesktopImageComponent::UpdateLocalDesktopCaptureStaging()
 		// Might be a chance of out of array range while float int conversion?
 		if (SourceImageData.IsValidIndex(ImageDataIndex))
 		{
-			SourceImageData[ImageDataIndex] = CurrCaptureColor;
+			FColor& SourceColorRef = SourceImageData[ImageDataIndex];
+
+			// Only RGB, because that is all replication carries and all SetFromReplicateInfo writes - alpha
+			// would be a false difference. This comparison is what finally gives bDirtyForReplication a
+			// meaningful false state: it used to be set on every capture regardless of whether the screen had
+			// moved, so it could never be false and the check that consumed it was abandoned.
+			if (SourceColorRef.R != CurrCaptureColor.R
+				|| SourceColorRef.G != CurrCaptureColor.G
+				|| SourceColorRef.B != CurrCaptureColor.B)
+			{
+				bAnyPixelChangedThisCapture = true;
+			}
+
+			SourceColorRef = CurrCaptureColor;
 		}
 	}
 
 
-	// For now there's no actual condition.
-	bDirtyForReplication = true;
+	if (bAnyPixelChangedThisCapture)
+	{
+		MarkDirtyForReplication();
+	}
+
+	// Left unconditional on purpose: this change is only about skipping needless replication walks, and
+	// gating the texture upload as well would be a separate behavioural change.
 	bDirtyForTextureUpdate = true;
 }
 
@@ -494,9 +517,10 @@ void UWendyDesktopImageComponent::ExtractReplicateInfo(FWendyDesktopImageReplica
 
 	// It is assume that this function is called per replication interval,
 	// but how often repliation being handled? like once in a tick?
-	
-	// Is checking bDirtyForReplication necessary? and even proper when the staging size is not ensured to be the same as replicating size?
-	// if (bDirtyForReplication) 
+
+	// The dirty check that used to be sketched here now lives in AWendyCharacter::UpdateDesktopImageReplication,
+	// which is the right level: this function extracts ONE region, so it could never decide on its own whether
+	// the whole image is in sync - which was exactly why the original attempt here didn't work.
 	{
 		OutReplicateInfo.UpdateBeginIndex = FMath::Max(LastReplicatedImageDataIndex, 0);
 		if (OutReplicateInfo.UpdateBeginIndex >= SourceImageData.Num() - 1)
@@ -547,9 +571,35 @@ void UWendyDesktopImageComponent::ExtractReplicateInfo(FWendyDesktopImageReplica
 		{
 			FMemory::Memzero(DstPtr + CopyElemNum, TailElemNum * sizeof(FWendyReplicatedColor));
 		}
-
-		//bDirtyForReplication = false;
 	}
+}
+
+void UWendyDesktopImageComponent::NotifyReplicationWalkResult(int32 InWalkedRegionNum, int32 InSentRegionNum)
+{
+	if (InSentRegionNum > 0)
+	{
+		// Something differed, so we can't claim the image is in sync. Start gathering evidence again.
+		// This also means a desktop with any constantly-animating element (including Wendy's own window, if
+		// it is on the captured desktop) keeps the flag set - which is correct, there really is new data.
+		CleanReplicateWalkCount = 0;
+		return;
+	}
+
+	CleanReplicateWalkCount += InWalkedRegionNum;
+
+	if (CleanReplicateWalkCount >= GetReplicateRegionCount())
+	{
+		// Every region has now been examined since the last change and none differed, so the whole image
+		// matches what was sent. This is the one moment it is safe to stop walking.
+		bDirtyForReplication = false;
+		CleanReplicateWalkCount = 0;
+	}
+}
+
+int32 UWendyDesktopImageComponent::GetReplicateRegionCount() const
+{
+	const int32 ReplicateBunchElemSize = FMath::Max(GetWdDesktopImageReplicateElemSize(), 1);
+	return FMath::DivideAndRoundUp(SourceImageData.Num(), ReplicateBunchElemSize);
 }
 
 void UWendyDesktopImageComponent::SetFromReplicateInfo(const FWendyDesktopImageReplicateInfo& InReplicateInfo)
@@ -584,6 +634,11 @@ void UWendyDesktopImageComponent::SetFromReplicateInfo(const FWendyDesktopImageR
 	if (FinalReplicatDataNum > 0)
 	{
 		bDirtyForTextureUpdate = true;
+
+		// Essential, not an optimization detail: a server holds remote characters whose SourceImageData only
+		// ever changes through here, and relaying that image onward goes through the replication walk. Without
+		// this the walk would be skipped forever for them and client-to-client image relay would stop dead.
+		MarkDirtyForReplication();
 	}
 
 #if WD_IMAGE_REP_PERF_CHECK

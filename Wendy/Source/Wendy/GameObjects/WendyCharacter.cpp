@@ -508,9 +508,13 @@ void AWendyCharacter::UpdateDesktopImageReplication()
 			{
 				// Now we won't even use Unreal replication for this..
 				UWendyGameInstance* WdGameInst = Cast<UWendyGameInstance>(UGameplayStatics::GetGameInstance(this));
-				if (IsValid(WdGameInst) 
+				if (IsValid(WdGameInst)
 					// UserAccountInfo is being set deferred, should wait until it is set.
 					&& (ConnectedUserAccountInfo.UserId.Len() > 0)
+					// Nothing in SourceImageData has changed since a full pass last confirmed it all matches
+					// what was sent, so walking it again can only burn game thread finding nothing. This is the
+					// case that used to log "0 / 10000" - ten thousand regions examined, nothing to send.
+					&& DesktopImageComponent->IsDirtyForReplication()
 					)
 				{
 					int32 ExtractAndSendNum = 0;
@@ -548,13 +552,23 @@ void AWendyCharacter::UpdateDesktopImageReplication()
 						++CheckExtractIterNum;
 #endif
 
-						// In diff mode, almost nothing might be sent when the displayed image is in static state, 
+						// In diff mode, almost nothing might be sent when the displayed image is in static state,
 						// then this loop can be infinite, so put some safety measure.
 						if (++ExtractAndSendSimpleLoopNum >= IterateMax)
 						{
 							break;
 						}
 					}
+
+					// Hand the result to the component, which decides when the image is provably in sync and the
+					// dirty flag can drop. It must accumulate across passes rather than demand a whole image in
+					// one: a pass is capped by wd.DesktopImageExtractItorNum, which can easily be smaller than
+					// the region count, and then "walked everything this pass" would be unsatisfiable.
+					// Clearing any earlier - after a single bunch, say - would strand the rest of a partially
+					// sent image, since one flag cannot express WHICH regions still owe an update. That
+					// granularity problem is why the original attempt at this was abandoned.
+					// With diff mode off every region counts as a send, so that path keeps always walking.
+					DesktopImageComponent->NotifyReplicationWalkResult(ExtractAndSendSimpleLoopNum, ExtractAndSendNum);
 				}
 
 				LastDesktopImageRepDirtyTime = CurrRT;
@@ -738,6 +752,14 @@ void AWendyCharacter::ResetLastSentWholeImageRepInfo()
 {
 	// Simply empty it then it will send all for the first frame.
 	LastSentWholeImageRepInfo.Empty();
+
+	// And force the walk to actually happen. Forgetting what we sent is pointless if the dirty flag is clear,
+	// because then nothing would ever re-examine the image and the new character would receive nothing until
+	// the local desktop happened to change.
+	if (DesktopImageComponent != nullptr)
+	{
+		DesktopImageComponent->MarkDirtyForReplication();
+	}
 }
 
 void AWendyCharacter::OnNewCharacterAppears(AWendyCharacter* InNewChar)

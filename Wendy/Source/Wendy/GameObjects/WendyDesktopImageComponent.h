@@ -70,6 +70,10 @@ protected:
 	 * It is supposed to be set like every tick in normally expected circumstances.
 	 * but there might be some exceptional cases that updating data can be considered as waste. */
 	bool bDirtyForReplication;
+	/** Regions examined without finding a difference since the last actual change, accumulated across passes.
+	 * Once it reaches a whole image's worth, every region has provably been checked and bDirtyForReplication
+	 * can drop. Reset whenever anything is sent or the image is marked dirty again. */
+	int32 CleanReplicateWalkCount;
 	/** Basically the same story as bDirtyForReplication,
 	 * but it can be set for non locally controlled owner too. */
 	bool bDirtyForTextureUpdate;
@@ -120,6 +124,24 @@ public:
 	 * It sets only part of SourceImageData, depend on the replicate info size 
 	 */
 	void SetFromReplicateInfo(const FWendyDesktopImageReplicateInfo& InReplicateInfo);
+
+	/** False means every region of SourceImageData is already known to match what was last sent, so walking it
+	 * again can only waste time. Set true whenever SourceImageData actually changes - which happens from TWO
+	 * places: local capture, and SetFromReplicateInfo applying received data (the latter is what lets a server
+	 * relay a client's desktop onward). */
+	bool IsDirtyForReplication() const { return bDirtyForReplication; }
+	/** Force a re-walk. Needed after anything that invalidates the sender's record of what it already sent.
+	 * Also discards accumulated clean-walk evidence, since the image may now differ again. */
+	void MarkDirtyForReplication() { bDirtyForReplication = true; CleanReplicateWalkCount = 0; }
+
+	/** Report what a replication pass found, so the component can work out when the image is provably in sync
+	 * and the flag can drop. Evidence accumulates ACROSS passes on purpose: a single pass is capped by
+	 * wd.DesktopImageExtractItorNum, which may well be smaller than the number of regions, in which case
+	 * "walked a whole image in one pass" would be impossible to satisfy. */
+	void NotifyReplicationWalkResult(int32 InWalkedRegionNum, int32 InSentRegionNum);
+
+	/** How many region walks make up one complete pass over the image. */
+	int32 GetReplicateRegionCount() const;
 
 #if WD_IMAGE_REP_PERF_CHECK
 	void UpdateForImageRefPerfCheck(int32 InRepDataNum);
