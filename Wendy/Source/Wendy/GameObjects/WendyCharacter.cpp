@@ -1,4 +1,4 @@
-// Copyright Working Dungeon Wendy, by DJ Song
+﻿// Copyright Working Dungeon Wendy, by DJ Song
 
 #include "WendyCharacter.h"
 //#include "HeadMountedDisplayFunctionLibrary.h"
@@ -526,18 +526,41 @@ void AWendyCharacter::UpdateDesktopImageReplication()
 					// meant a heap allocation for every bunch - tens of thousands per second on the game thread,
 					// for a buffer of identical size every time. Reuse is safe because everything downstream
 					// (the staging push, and the diff-mode last-sent record) takes its own copy, and
-					// ExtractReplicateInfo overwrites the used range then zeroes the tail.
+					// PackReplicateRegion overwrites the used range then zeroes the tail.
 					FWendyDesktopImageReplicateInfo LocalReplicateInfo;
 					LocalReplicateInfo.ImageData.AddZeroed(GetWdDesktopImageReplicateElemSize());
 
+					const bool bDiffMode = IsImageReplicateDiffMode();
+
 					while(ExtractAndSendNum < ExtractAndSendMaxNum)
 					{
-						DesktopImageComponent->ExtractReplicateInfo(LocalReplicateInfo);
-
-						if (IsUpdatedImageRepInfo(LocalReplicateInfo) || (false == IsImageReplicateDiffMode()))
+						// Walk to the next region WITHOUT packing it yet.
+						int32 RegionBeginIndex = 0;
+						int32 RegionElemNum = 0;
+						if (false == DesktopImageComponent->AdvanceToNextReplicateRegion(
+							LocalReplicateInfo.ImageData.Num(), RegionBeginIndex, RegionElemNum))
 						{
+							// No captured image to walk yet; stop rather than spin to IterateMax.
+							break;
+						}
+
+						// Decide whether this region is worth packing by comparing the live pixels against what
+						// was last sent. Packing first and asking afterwards - the old order - threw that work
+						// away for every unchanged region, which in diff mode is most of them.
+						bool bRegionNeedsSend = true;
+						if (bDiffMode)
+						{
+							const FWendyDesktopImageReplicateInfo* LastSentInfo = LastSentWholeImageRepInfo.Find(RegionBeginIndex);
+							bRegionNeedsSend = (LastSentInfo == nullptr)
+								|| DesktopImageComponent->IsReplicateRegionDifferent(RegionBeginIndex, RegionElemNum, *LastSentInfo);
+						}
+
+						if (bRegionNeedsSend)
+						{
+							DesktopImageComponent->PackReplicateRegion(RegionBeginIndex, RegionElemNum, LocalReplicateInfo);
+
 							WdGameInst->SetSendImageInfo(ConnectedUserAccountInfo.UserId, LocalReplicateInfo);
-							if (IsImageReplicateDiffMode())
+							if (bDiffMode)
 							{
 								UpdateLastSentWholeImageRepInfo(LocalReplicateInfo);
 							}
@@ -734,12 +757,6 @@ void AWendyCharacter::ZoomCameraView(float InAmount)
 			);
 		}
 	}
-}
-
-bool AWendyCharacter::IsUpdatedImageRepInfo(const FWendyDesktopImageReplicateInfo& InCheckInfo) const
-{
-	const FWendyDesktopImageReplicateInfo* FoundOne = LastSentWholeImageRepInfo.Find(InCheckInfo.UpdateBeginIndex);
-	return (nullptr == FoundOne || *FoundOne != InCheckInfo);
 }
 
 void AWendyCharacter::UpdateLastSentWholeImageRepInfo(const FWendyDesktopImageReplicateInfo& InCheckInfo)

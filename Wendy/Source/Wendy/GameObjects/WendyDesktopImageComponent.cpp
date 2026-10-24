@@ -1,4 +1,4 @@
-// Copyright Working Dungeon Wendy, by DJ Song
+﻿// Copyright Working Dungeon Wendy, by DJ Song
 
 #include "WendyDesktopImageComponent.h"
 #include "Engine/Texture2D.h"
@@ -23,7 +23,10 @@
 
 DECLARE_CYCLE_STAT(TEXT("UpdateDesktopCapture"), STAT_UpdateLocalDesktopCaptureStaging, STATGROUP_WendyGame);
 DECLARE_CYCLE_STAT(TEXT("UpdateOuputTexture"), STAT_UpdateOuputTexture, STATGROUP_WendyGame);
-DECLARE_CYCLE_STAT(TEXT("ExtractReplicateInfo"), STAT_ExtractReplicateInfo, STATGROUP_WendyGame);
+// Split in two on purpose: the whole point of checking before packing is that the diff cost should now
+// dominate and the pack cost should shrink. Separate counters make that visible in `stat WendyGame`.
+DECLARE_CYCLE_STAT(TEXT("ReplicateRegionDiffCheck"), STAT_ReplicateRegionDiffCheck, STATGROUP_WendyGame);
+DECLARE_CYCLE_STAT(TEXT("PackReplicateRegion"), STAT_PackReplicateRegion, STATGROUP_WendyGame);
 
 FIntPoint GetWendyDesktopImageSize()
 {
@@ -511,66 +514,102 @@ void UWendyDesktopImageComponent::UpdateOutputTexture()
 	}
 }
 
-void UWendyDesktopImageComponent::ExtractReplicateInfo(FWendyDesktopImageReplicateInfo& OutReplicateInfo)
+bool UWendyDesktopImageComponent::AdvanceToNextReplicateRegion(int32 InMaxElemNum, int32& OutBeginIndex, int32& OutElemNum)
 {
-	SCOPE_CYCLE_COUNTER(STAT_ExtractReplicateInfo);
-
-	// It is assume that this function is called per replication interval,
-	// but how often repliation being handled? like once in a tick?
-
-	// The dirty check that used to be sketched here now lives in AWendyCharacter::UpdateDesktopImageReplication,
-	// which is the right level: this function extracts ONE region, so it could never decide on its own whether
-	// the whole image is in sync - which was exactly why the original attempt here didn't work.
+	OutBeginIndex = FMath::Max(LastReplicatedImageDataIndex, 0);
+	if (OutBeginIndex >= SourceImageData.Num() - 1)
 	{
-		OutReplicateInfo.UpdateBeginIndex = FMath::Max(LastReplicatedImageDataIndex, 0);
-		if (OutReplicateInfo.UpdateBeginIndex >= SourceImageData.Num() - 1)
+		OutBeginIndex = 0;
+	}
+
+	const int32 ReplicateBunchElemSize = GetWdDesktopImageReplicateElemSize();
+
+	// Clamped against the caller's buffer as well as the configured bunch size, exactly as before - the cursor
+	// must never advance past what can actually be packed, or regions would be skipped entirely.
+	OutElemNum = FMath::Min(InMaxElemNum, ReplicateBunchElemSize);
+
+	// Just clamp here. Don't go around LastReplicatedImageDataIndex.
+	LastReplicatedImageDataIndex = OutBeginIndex + OutElemNum;
+
+	const int32 RepImageIndexOver = LastReplicatedImageDataIndex - SourceImageData.Num() + 1;
+	if (RepImageIndexOver > 0)
+	{
+		LastReplicatedImageDataIndex -= RepImageIndexOver;
+		OutElemNum -= RepImageIndexOver;
+	}
+
+	// False when there is nothing to work with - SourceImageData empty before the first capture drives the
+	// arithmetic above negative. Lets the caller stop rather than spin.
+	return (OutElemNum > 0);
+}
+
+bool UWendyDesktopImageComponent::IsReplicateRegionDifferent(int32 InBeginIndex, int32 InElemNum, const FWendyDesktopImageReplicateInfo& InLastSentInfo) const
+{
+	SCOPE_CYCLE_COUNTER(STAT_ReplicateRegionDiffCheck);
+
+	// Any shape mismatch counts as different rather than risking a partial comparison.
+	if (InLastSentInfo.UpdateElemNum != InElemNum
+		|| InLastSentInfo.ImageData.Num() < InElemNum
+		|| InBeginIndex < 0
+		|| InElemNum <= 0
+		|| InBeginIndex + InElemNum > SourceImageData.Num())
+	{
+		return true;
+	}
+
+	// Compares the SOURCE pixels against what was last sent, so an unchanged region never has to be packed at
+	// all. The old order packed first and asked afterwards, which threw that work away for every region that
+	// turned out to be unchanged - the common case in diff mode.
+	const FColor* RESTRICT SrcPtr = SourceImageData.GetData() + InBeginIndex;
+	const FWendyReplicatedColor* RESTRICT LastSentPtr = InLastSentInfo.ImageData.GetData();
+
+	for (int32 RDI = 0; RDI < InElemNum; ++RDI)
+	{
+		// RGB only: that is all replication carries, so alpha would be a false difference.
+		if (SrcPtr[RDI].R != LastSentPtr[RDI].R
+			|| SrcPtr[RDI].G != LastSentPtr[RDI].G
+			|| SrcPtr[RDI].B != LastSentPtr[RDI].B)
 		{
-			OutReplicateInfo.UpdateBeginIndex = 0;
+			return true;
 		}
+	}
 
-		const int32 ReplicateBunchElemSize = GetWdDesktopImageReplicateElemSize();
+	return false;
+}
 
-		// OutReplicateInfo.ImageData would probably be sized to ReplicateBunchElemSize.. Just double checking here.
-		OutReplicateInfo.UpdateElemNum = FMath::Min(OutReplicateInfo.ImageData.Num(), ReplicateBunchElemSize);
+void UWendyDesktopImageComponent::PackReplicateRegion(int32 InBeginIndex, int32 InElemNum, FWendyDesktopImageReplicateInfo& OutReplicateInfo) const
+{
+	SCOPE_CYCLE_COUNTER(STAT_PackReplicateRegion);
 
-		// Just clamp here. Don't go around LastReplicatedImageDataIndex.
-		LastReplicatedImageDataIndex = OutReplicateInfo.UpdateBeginIndex + OutReplicateInfo.UpdateElemNum;
+	OutReplicateInfo.UpdateBeginIndex = InBeginIndex;
+	OutReplicateInfo.UpdateElemNum = InElemNum;
 
-		const int32 RepImageIndexOver = LastReplicatedImageDataIndex - SourceImageData.Num() + 1;
-		if (RepImageIndexOver > 0)
-		{
-			LastReplicatedImageDataIndex -= RepImageIndexOver;
-			OutReplicateInfo.UpdateElemNum -= RepImageIndexOver;
-		}
+	// Raw pointers rather than TArray::operator[]: that range-checks on every access outside Shipping, and this
+	// loop runs for ~every pixel of the image several times a second on the GAME thread, so the checks alone
+	// were costing tens of millions of branches per second. Bounds are established by the clamping in
+	// AdvanceToNextReplicateRegion, so checking per pixel buys nothing.
+	const FColor* RESTRICT SrcPtr = SourceImageData.GetData() + FMath::Max(InBeginIndex, 0);
+	FWendyReplicatedColor* RESTRICT DstPtr = OutReplicateInfo.ImageData.GetData();
+	// Clamped at zero deliberately: the wrap-around arithmetic can drive the element count negative when
+	// SourceImageData is empty (before the first capture). The copy would simply not iterate, but the tail
+	// memzero below would compute a size larger than the buffer, so pin it here.
+	const int32 CopyElemNum = FMath::Clamp(InElemNum, 0, OutReplicateInfo.ImageData.Num());
 
-		// Raw pointers rather than TArray::operator[]: that range-checks on every access outside Shipping,
-		// and this loop runs for ~every pixel of the image several times a second on the GAME thread, so the
-		// checks alone were costing tens of millions of branches per second. Bounds are already established
-		// by the clamping above, so checking per pixel buys nothing.
-		const FColor* RESTRICT SrcPtr = SourceImageData.GetData() + OutReplicateInfo.UpdateBeginIndex;
-		FWendyReplicatedColor* RESTRICT DstPtr = OutReplicateInfo.ImageData.GetData();
-		// Clamped at zero deliberately: the wrap-around arithmetic above can drive UpdateElemNum negative when
-		// SourceImageData is empty (before the first capture). The old loop just didn't iterate in that case,
-		// but the tail memzero below would compute a size larger than the buffer, so pin it here.
-		const int32 CopyElemNum = FMath::Max(OutReplicateInfo.UpdateElemNum, 0);
+	for (int32 RDI = 0; RDI < CopyElemNum; ++RDI)
+	{
+		// Can't memcpy: FColor is 4 bytes (incl. A) and FWendyReplicatedColor is 3.
+		DstPtr[RDI].R = SrcPtr[RDI].R;
+		DstPtr[RDI].G = SrcPtr[RDI].G;
+		DstPtr[RDI].B = SrcPtr[RDI].B;
+	}
 
-		for (int32 RDI = 0; RDI < CopyElemNum; ++RDI)
-		{
-			// Can't memcpy: FColor is 4 bytes (incl. A) and FWendyReplicatedColor is 3.
-			DstPtr[RDI].R = SrcPtr[RDI].R;
-			DstPtr[RDI].G = SrcPtr[RDI].G;
-			DstPtr[RDI].B = SrcPtr[RDI].B;
-		}
-
-		// The caller now reuses one buffer across bunches instead of allocating a freshly zeroed one each
-		// time, so clear any tail beyond what we just wrote. Diff mode compares the WHOLE ImageData array,
-		// and without this a leftover tail from the previous bunch could make an unchanged region look
-		// changed. Only costs anything on the one bunch per pass that wraps past the end of the image.
-		const int32 TailElemNum = OutReplicateInfo.ImageData.Num() - CopyElemNum;
-		if (TailElemNum > 0)
-		{
-			FMemory::Memzero(DstPtr + CopyElemNum, TailElemNum * sizeof(FWendyReplicatedColor));
-		}
+	// The caller reuses one buffer across bunches instead of allocating a freshly zeroed one each time, so
+	// clear any tail beyond what we just wrote - otherwise leftovers from the previous bunch would travel.
+	// Only costs anything on the one bunch per pass that wraps past the end of the image.
+	const int32 TailElemNum = OutReplicateInfo.ImageData.Num() - CopyElemNum;
+	if (TailElemNum > 0)
+	{
+		FMemory::Memzero(DstPtr + CopyElemNum, TailElemNum * sizeof(FWendyReplicatedColor));
 	}
 }
 

@@ -112,12 +112,19 @@ protected:
 	void UpdateOutputTexture();
 public:
 	
-	/**
-	 * To be called when the owner is locally controlled character, 
-	 * so to get image data transferred to server and other clients.
-	 * It fills up OutReplicateInfo step by step each time you call this, managing the index that being set till last time.
-	 */
-	void ExtractReplicateInfo(FWendyDesktopImageReplicateInfo& OutReplicateInfo);
+	/** The three steps a replication pass is built from, kept separate so a caller can decide whether a
+	 * region is even worth packing BEFORE paying to pack it. In diff mode most regions are unchanged, so the
+	 * old pack-then-ask order threw that work away for the common case.
+	 *
+	 * Advances the walk cursor and reports the next region. InMaxElemNum is the caller's buffer capacity: the
+	 * cursor must not advance past what can actually be packed or regions would be skipped. Returns false when
+	 * there is nothing to walk (no captured image yet), so the caller can stop instead of spinning. */
+	bool AdvanceToNextReplicateRegion(int32 InMaxElemNum, int32& OutBeginIndex, int32& OutElemNum);
+	/** True when this region's live pixels differ from the given record of what was last sent for it. Reads the
+	 * source directly, so nothing has to be packed to find out. */
+	bool IsReplicateRegionDifferent(int32 InBeginIndex, int32 InElemNum, const FWendyDesktopImageReplicateInfo& InLastSentInfo) const;
+	/** Fills OutReplicateInfo with the region's pixels, ready to send. */
+	void PackReplicateRegion(int32 InBeginIndex, int32 InElemNum, FWendyDesktopImageReplicateInfo& OutReplicateInfo) const;
 	/** 
 	 * To be called when the owner is remote character
 	 * Put image data being transferred through network to SourceImageData here. 

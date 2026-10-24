@@ -1,4 +1,4 @@
-// Copyright Working Dungeon Wendy, by DJ Song
+﻿// Copyright Working Dungeon Wendy, by DJ Song
 
 #pragma once
 
@@ -218,7 +218,6 @@ protected:
 	/** Check if an image rep info is updated one compared with LastSentWholeImageRepInfo,
 	 * so if it returns true then it will be sent to the network.
 	 * For ImageReplicateDiffMode */
-	bool IsUpdatedImageRepInfo(const FWendyDesktopImageReplicateInfo& InCheckInfo) const;
 	void UpdateLastSentWholeImageRepInfo(const FWendyDesktopImageReplicateInfo& InCheckInfo);
 	/** Sometimes need reset and start it over. */
 	void ResetLastSentWholeImageRepInfo();
