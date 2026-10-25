@@ -438,8 +438,14 @@ void FWendyImageRepNetwork::ConsumeImageInfo(const FString& ImageOwnerId, TArray
 		TArray<FWendyDesktopImageReplicateInfo>* StagingImageInfo = RecvStagingReplicateInfo.Find(ImageOwnerId);
 		if (StagingImageInfo != nullptr && StagingImageInfo->Num() > 0)
 		{
-			OutImageInfo.Append(*StagingImageInfo);
-			StagingImageInfo->Empty();
+			// MoveTemp, not a copy. Every info owns a heap ImageData array, so Append(const&) allocated and
+			// copied one buffer per staged bunch and then Empty() freed the originals immediately - pure churn
+			// on the game thread, every tick, for data we were handing over wholesale anyway.
+			OutImageInfo.Append(MoveTemp(*StagingImageInfo));
+
+			// Reset rather than Empty: the moved-from elements still need clearing, but keeping the outer
+			// array's capacity avoids reallocating it again next tick.
+			StagingImageInfo->Reset();
 		}
 	}
 }

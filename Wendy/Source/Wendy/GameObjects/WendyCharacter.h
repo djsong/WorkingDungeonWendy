@@ -145,9 +145,9 @@ protected:
 	double LastDesktopImageRepDirtyTime;
 	bool bDesktopImageRepDirtyLastTick; // At least not every tick
 
-	/** A big map caching all image info for shared monitor, being refered for sending only changed pixel bunch.
-	 * Key is UpdateBeginIndex of value (FWendyDesktopImageReplicateInfo) */
-	TMap<int32, FWendyDesktopImageReplicateInfo> LastSentWholeImageRepInfo;
+	/** Scratch for the per-tick drain of received image bunches. A member rather than a local so the heap
+	 * buffers it accumulates are reused instead of reallocated every tick. */
+	TArray<FWendyDesktopImageReplicateInfo> ConsumedReplicateInfoBuffer;
 
 	/** Especially when a remote client gets replicated PickedHomeSeatPosition, its actual homeseat finding process need to be deferred 
 	 * due to other component and resouce generation process. */
@@ -215,10 +215,11 @@ protected:
 
 	void ZoomCameraView(float InAmount);
 
-	/** Check if an image rep info is updated one compared with LastSentWholeImageRepInfo,
+	/** Forget what has been sent so the whole image goes out again (a new participant appeared). Forwards to
+	 * the component, which owns that record. Historical name kept because callers read well with it.
+	 * Was: check/update against LastSentWholeImageRepInfo,
 	 * so if it returns true then it will be sent to the network.
 	 * For ImageReplicateDiffMode */
-	void UpdateLastSentWholeImageRepInfo(const FWendyDesktopImageReplicateInfo& InCheckInfo);
 	/** Sometimes need reset and start it over. */
 	void ResetLastSentWholeImageRepInfo();
 

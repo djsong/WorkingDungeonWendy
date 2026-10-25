@@ -1,4 +1,4 @@
-﻿// Copyright Working Dungeon Wendy, by DJ Song
+// Copyright Working Dungeon Wendy, by DJ Song
 
 #include "WendyCharacter.h"
 //#include "HeadMountedDisplayFunctionLibrary.h"
@@ -520,7 +520,11 @@ void AWendyCharacter::UpdateDesktopImageReplication()
 					int32 ExtractAndSendNum = 0;
 					int32 ExtractAndSendSimpleLoopNum = 0;
 					const int32 ExtractAndSendMaxNum = CVarWdDesktopImageReplicateBunchNum.GetValueOnGameThread();
-					const int32 IterateMax = CVarWdDesktopImageExtractItorNum.GetValueOnGameThread();
+					
+					// Iterate more than ReplicateRegionCount in a single tick is meaningless.
+					const int32 IterateMax = FMath::Min(
+						CVarWdDesktopImageExtractItorNum.GetValueOnGameThread(),
+						DesktopImageComponent->GetReplicateRegionCount());
 
 					// Declared OUTSIDE the loop and sized once. It used to be constructed per iteration, which
 					// meant a heap allocation for every bunch - tens of thousands per second on the game thread,
@@ -547,13 +551,8 @@ void AWendyCharacter::UpdateDesktopImageReplication()
 						// Decide whether this region is worth packing by comparing the live pixels against what
 						// was last sent. Packing first and asking afterwards - the old order - threw that work
 						// away for every unchanged region, which in diff mode is most of them.
-						bool bRegionNeedsSend = true;
-						if (bDiffMode)
-						{
-							const FWendyDesktopImageReplicateInfo* LastSentInfo = LastSentWholeImageRepInfo.Find(RegionBeginIndex);
-							bRegionNeedsSend = (LastSentInfo == nullptr)
-								|| DesktopImageComponent->IsReplicateRegionDifferent(RegionBeginIndex, RegionElemNum, *LastSentInfo);
-						}
+						const bool bRegionNeedsSend = (false == bDiffMode)
+							|| DesktopImageComponent->DoesReplicateRegionNeedSend(RegionBeginIndex, RegionElemNum);
 
 						if (bRegionNeedsSend)
 						{
@@ -562,7 +561,7 @@ void AWendyCharacter::UpdateDesktopImageReplication()
 							WdGameInst->SetSendImageInfo(ConnectedUserAccountInfo.UserId, LocalReplicateInfo);
 							if (bDiffMode)
 							{
-								UpdateLastSentWholeImageRepInfo(LocalReplicateInfo);
+								DesktopImageComponent->MarkReplicateRegionSent(RegionBeginIndex, RegionElemNum);
 							}
 
 							++ExtractAndSendNum;
@@ -607,9 +606,12 @@ void AWendyCharacter::UpdateDesktopImageReplication()
 			UWendyGameInstance* WdGameInst = Cast<UWendyGameInstance>(UGameplayStatics::GetGameInstance(this));
 			if (IsValid(WdGameInst))
 			{
-				TArray<FWendyDesktopImageReplicateInfo> ConsumedReplicateInfo;
-				WdGameInst->ConsumeImageInfo(ConnectedUserAccountInfo.UserId, ConsumedReplicateInfo);
-				for (const FWendyDesktopImageReplicateInfo& ReplicateInfo : ConsumedReplicateInfo)
+				// Reused member rather than a local: this ran every tick and the array it builds holds one heap
+				// buffer per received bunch, so a fresh one meant reallocating all of that from scratch.
+				// Reset keeps the capacity, and ConsumeImageInfo moves the staged infos into it.
+				ConsumedReplicateInfoBuffer.Reset();
+				WdGameInst->ConsumeImageInfo(ConnectedUserAccountInfo.UserId, ConsumedReplicateInfoBuffer);
+				for (const FWendyDesktopImageReplicateInfo& ReplicateInfo : ConsumedReplicateInfoBuffer)
 				{
 					DesktopImageComponent->SetFromReplicateInfo(ReplicateInfo);
 				}
@@ -759,23 +761,13 @@ void AWendyCharacter::ZoomCameraView(float InAmount)
 	}
 }
 
-void AWendyCharacter::UpdateLastSentWholeImageRepInfo(const FWendyDesktopImageReplicateInfo& InCheckInfo)
-{
-	FWendyDesktopImageReplicateInfo& FoundOrAddElem = LastSentWholeImageRepInfo.FindOrAdd(InCheckInfo.UpdateBeginIndex);
-	FoundOrAddElem = InCheckInfo;
-}
-
 void AWendyCharacter::ResetLastSentWholeImageRepInfo()
 {
-	// Simply empty it then it will send all for the first frame.
-	LastSentWholeImageRepInfo.Empty();
-
-	// And force the walk to actually happen. Forgetting what we sent is pointless if the dirty flag is clear,
-	// because then nothing would ever re-examine the image and the new character would receive nothing until
-	// the local desktop happened to change.
+	// The record of what was sent now lives with the pixels it mirrors, on the component. It also marks the
+	// image dirty, because forgetting what we sent is pointless if nothing then re-walks it to act on that.
 	if (DesktopImageComponent != nullptr)
 	{
-		DesktopImageComponent->MarkDirtyForReplication();
+		DesktopImageComponent->ResetSentImageRecord();
 	}
 }
 

@@ -69,6 +69,17 @@ protected:
 	/** Avallable for locally controlled owner. To be set when desktop image is just captured.
 	 * It is supposed to be set like every tick in normally expected circumstances.
 	 * but there might be some exceptional cases that updating data can be considered as waste. */
+	/** A copy of SourceImageData as it was last sent, used to detect which regions changed.
+	 *
+	 * Deliberately the SAME layout as SourceImageData (FColor, one entry per pixel) rather than the packed
+	 * 3-byte replication format. That makes the diff a single Memcmp per region instead of three byte
+	 * comparisons per pixel across mismatched strides, and the update a single Memcpy. It also replaces a
+	 * TMap of ~2800 per-region structs, each of which owned its own heap array, with one allocation. */
+	TArray<FColor> LastSentImageMirror;
+	/** One bit per region: has it been sent at least once since the last reset? Needed because a never-sent
+	 * region could otherwise happen to match the zero-initialised mirror and be skipped forever. */
+	TBitArray<> SentRegionFlags;
+
 	bool bDirtyForReplication;
 	/** Regions examined without finding a difference since the last actual change, accumulated across passes.
 	 * Once it reaches a whole image's worth, every region has provably been checked and bDirtyForReplication
@@ -120,9 +131,15 @@ public:
 	 * cursor must not advance past what can actually be packed or regions would be skipped. Returns false when
 	 * there is nothing to walk (no captured image yet), so the caller can stop instead of spinning. */
 	bool AdvanceToNextReplicateRegion(int32 InMaxElemNum, int32& OutBeginIndex, int32& OutElemNum);
-	/** True when this region's live pixels differ from the given record of what was last sent for it. Reads the
-	 * source directly, so nothing has to be packed to find out. */
-	bool IsReplicateRegionDifferent(int32 InBeginIndex, int32 InElemNum, const FWendyDesktopImageReplicateInfo& InLastSentInfo) const;
+	/** True when this region has to go out: either it hasn't been sent since the last reset, or its live pixels
+	 * differ from the mirror of what was last sent. Reads the source directly, so nothing has to be packed to
+	 * find out, and the comparison is a single Memcmp because the mirror shares SourceImageData's layout. */
+	bool DoesReplicateRegionNeedSend(int32 InBeginIndex, int32 InElemNum) const;
+	/** Records that this region's current pixels have now been sent. */
+	void MarkReplicateRegionSent(int32 InBeginIndex, int32 InElemNum);
+	/** Forget what was sent so the whole image goes out again (e.g. a new participant appeared). Also marks
+	 * dirty, since otherwise nothing would re-walk the image to act on it. */
+	void ResetSentImageRecord();
 	/** Fills OutReplicateInfo with the region's pixels, ready to send. */
 	void PackReplicateRegion(int32 InBeginIndex, int32 InElemNum, FWendyDesktopImageReplicateInfo& OutReplicateInfo) const;
 	/** 
@@ -149,6 +166,12 @@ public:
 
 	/** How many region walks make up one complete pass over the image. */
 	int32 GetReplicateRegionCount() const;
+
+private:
+	/** Which SentRegionFlags bit a region's begin index corresponds to. */
+	int32 GetReplicateRegionIndex(int32 InBeginIndex) const;
+
+public:
 
 #if WD_IMAGE_REP_PERF_CHECK
 	void UpdateForImageRefPerfCheck(int32 InRepDataNum);

@@ -95,6 +95,15 @@ UWendyDesktopImageComponent::UWendyDesktopImageComponent(const FObjectInitialize
 	const FIntPoint WendyDesktopImageSize = GetWendyDesktopImageSize();
 	SourceImageData.AddZeroed(WendyDesktopImageSize.X * WendyDesktopImageSize.Y);
 
+	// Mirrors SourceImageData exactly so the diff can be a straight Memcmp. One allocation here replaces the
+	// ~2800 per-region heap arrays the old TMap-of-structs record used to hold.
+	LastSentImageMirror.AddZeroed(SourceImageData.Num());
+
+	// Every region starts unsent, so the first pass sends the whole image regardless of what the mirror holds.
+	// Sized from the bunch size, which is read-only at runtime, so this never needs resizing.
+	const int32 ReplicateBunchElemSize = FMath::Max(GetWdDesktopImageReplicateElemSize(), 1);
+	SentRegionFlags.Init(false, FMath::DivideAndRoundUp(SourceImageData.Num(), ReplicateBunchElemSize));
+
 	OutputTexture = nullptr;
 
 	LastReplicatedImageDataIndex = -1;
@@ -543,38 +552,74 @@ bool UWendyDesktopImageComponent::AdvanceToNextReplicateRegion(int32 InMaxElemNu
 	return (OutElemNum > 0);
 }
 
-bool UWendyDesktopImageComponent::IsReplicateRegionDifferent(int32 InBeginIndex, int32 InElemNum, const FWendyDesktopImageReplicateInfo& InLastSentInfo) const
+int32 UWendyDesktopImageComponent::GetReplicateRegionIndex(int32 InBeginIndex) const
+{
+	// Regions are walked in fixed strides from 0, so the begin index is always a whole number of bunches in.
+	const int32 ReplicateBunchElemSize = FMath::Max(GetWdDesktopImageReplicateElemSize(), 1);
+	return InBeginIndex / ReplicateBunchElemSize;
+}
+
+bool UWendyDesktopImageComponent::DoesReplicateRegionNeedSend(int32 InBeginIndex, int32 InElemNum) const
 {
 	SCOPE_CYCLE_COUNTER(STAT_ReplicateRegionDiffCheck);
 
-	// Any shape mismatch counts as different rather than risking a partial comparison.
-	if (InLastSentInfo.UpdateElemNum != InElemNum
-		|| InLastSentInfo.ImageData.Num() < InElemNum
-		|| InBeginIndex < 0
+	// Anything out of shape is treated as needing a send rather than risking a partial comparison.
+	if (InBeginIndex < 0
 		|| InElemNum <= 0
-		|| InBeginIndex + InElemNum > SourceImageData.Num())
+		|| InBeginIndex + InElemNum > SourceImageData.Num()
+		|| InBeginIndex + InElemNum > LastSentImageMirror.Num())
 	{
 		return true;
 	}
 
-	// Compares the SOURCE pixels against what was last sent, so an unchanged region never has to be packed at
-	// all. The old order packed first and asked afterwards, which threw that work away for every region that
-	// turned out to be unchanged - the common case in diff mode.
-	const FColor* RESTRICT SrcPtr = SourceImageData.GetData() + InBeginIndex;
-	const FWendyReplicatedColor* RESTRICT LastSentPtr = InLastSentInfo.ImageData.GetData();
-
-	for (int32 RDI = 0; RDI < InElemNum; ++RDI)
+	// Never sent since the last reset, so it must go out whatever the pixels say. Without this check a region
+	// that happens to match the zero-initialised mirror (a black area, say) would never be sent at all.
+	const int32 RegionIndex = GetReplicateRegionIndex(InBeginIndex);
+	if (false == SentRegionFlags.IsValidIndex(RegionIndex) || false == SentRegionFlags[RegionIndex])
 	{
-		// RGB only: that is all replication carries, so alpha would be a false difference.
-		if (SrcPtr[RDI].R != LastSentPtr[RDI].R
-			|| SrcPtr[RDI].G != LastSentPtr[RDI].G
-			|| SrcPtr[RDI].B != LastSentPtr[RDI].B)
-		{
-			return true;
-		}
+		return true;
 	}
 
-	return false;
+	// One Memcmp over the region. This is the whole point of the mirror sharing SourceImageData's FColor
+	// layout: the old record held packed 3-byte pixels, so comparing meant three byte tests per pixel across
+	// mismatched strides, which cannot vectorise. Alpha is included and that is fine - the mirror is a copy of
+	// these very FColors, so alpha matches by construction.
+	return (0 != FMemory::Memcmp(
+		SourceImageData.GetData() + InBeginIndex,
+		LastSentImageMirror.GetData() + InBeginIndex,
+		InElemNum * sizeof(FColor)));
+}
+
+void UWendyDesktopImageComponent::MarkReplicateRegionSent(int32 InBeginIndex, int32 InElemNum)
+{
+	if (InBeginIndex < 0 || InElemNum <= 0
+		|| InBeginIndex + InElemNum > SourceImageData.Num()
+		|| InBeginIndex + InElemNum > LastSentImageMirror.Num())
+	{
+		return;
+	}
+
+	// A single Memcpy, for the same reason the compare is a single Memcmp.
+	FMemory::Memcpy(
+		LastSentImageMirror.GetData() + InBeginIndex,
+		SourceImageData.GetData() + InBeginIndex,
+		InElemNum * sizeof(FColor));
+
+	const int32 RegionIndex = GetReplicateRegionIndex(InBeginIndex);
+	if (SentRegionFlags.IsValidIndex(RegionIndex))
+	{
+		SentRegionFlags[RegionIndex] = true;
+	}
+}
+
+void UWendyDesktopImageComponent::ResetSentImageRecord()
+{
+	// Only the flags need clearing - with every region marked unsent the mirror's contents are irrelevant
+	// until each region is sent and overwritten again.
+	SentRegionFlags.Init(false, SentRegionFlags.Num());
+
+	// Pointless to forget what we sent if nothing then re-walks the image to act on it.
+	MarkDirtyForReplication();
 }
 
 void UWendyDesktopImageComponent::PackReplicateRegion(int32 InBeginIndex, int32 InElemNum, FWendyDesktopImageReplicateInfo& OutReplicateInfo) const
