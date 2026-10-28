@@ -23,6 +23,8 @@
 
 DECLARE_CYCLE_STAT(TEXT("CapturePrimaryDisplay"), STAT_CapturePrimaryDisplay, STATGROUP_WendyGame);
 DECLARE_CYCLE_STAT(TEXT("CapturePrimaryDisplay_BitBlt"), STAT_CapturePrimaryDisplay_BitBlt, STATGROUP_WendyGame);
+DECLARE_CYCLE_STAT(TEXT("CapturePrimaryDisplay_FlushAndCopy"), STAT_CapturePrimaryDisplay_FlushAndCopy, STATGROUP_WendyGame);
+
 DECLARE_CYCLE_STAT(TEXT("UpdateDesktopCapture"), STAT_UpdateLocalDesktopCaptureStaging, STATGROUP_WendyGame);
 DECLARE_CYCLE_STAT(TEXT("UpdateOuputTexture"), STAT_UpdateOuputTexture, STATGROUP_WendyGame);
 // Split in two on purpose: the whole point of checking before packing is that the diff cost should now
@@ -201,57 +203,122 @@ void UWendyDesktopImageComponent::UpdateCachedDisplayMetrics()
 #if PLATFORM_WINDOWS
 namespace WendyWindowsDesktopCaptureImpl
 {
-	/** Returned BITMAPINFO is what you would need for actual bitmap data access. 
-	 * It is allocated internally so you should release it after using it. */
-	BITMAPINFO* GetBitmapInfoFromHBitmap(HBITMAP InHBit)
+	/** GDI objects kept alive between captures.
+	 *
+	 * The old path rebuilt all of this 20 times a second - CreateDC, CreateCompatibleDC and a full-screen
+	 * CreateCompatibleBitmap - then read the pixels back with GetDIBits TWICE (once only to learn the size)
+	 * into a malloc'd-then-realloc'd full-screen buffer, which was finally Memcpy'd into the destination.
+	 * That was two full-resolution copies plus a full-screen heap allocation per capture, on the game thread.
+	 *
+	 * Caching also settles the bitmap's lifetime, which the old code left open: it never DeleteObject'd the
+	 * bitmap, and deleting the DC a bitmap is selected into does NOT free the bitmap.
+	 *
+	 * The bitmap is a DIB SECTION rather than a device-dependent one, and that is what removes GetDIBits
+	 * entirely - BitBlt writes into memory we can read directly through CapturedBits.
+	 */
+	struct FDesktopCaptureGdiState
 	{
-		HDC WholeScreenDC = GetDC(nullptr);
+		HDC ScreenDC = nullptr;
+		HDC MemDC = nullptr;
+		HBITMAP CapturedBitmap = nullptr;
+		/** Whatever MemDC held before ours. Must go back before our bitmap can be deleted. */
+		HGDIOBJ PrevBitmap = nullptr;
+		/** Points straight at CapturedBitmap's pixels. Owned by GDI, freed along with the bitmap. */
+		void* CapturedBits = nullptr;
+		int32 Width = 0;
+		int32 Height = 0;
 
-		BITMAP BitHeaderDef;
-		BITMAPINFOHEADER BitInfoHeader;
-		
-		// Don't understand why GetObject is not found.. That should be a simple wrapper to GetObjectW or GetObjectA according to UNICODE define.
-		GetObjectW(InHBit, sizeof(BITMAP), &BitHeaderDef);
-
-		//GetObject(InHBit, sizeof(BITMAP), &BitHeaderDef);
-		BitInfoHeader.biSize = sizeof(BITMAPINFOHEADER);
-		BitInfoHeader.biWidth = BitHeaderDef.bmWidth;
-		BitInfoHeader.biHeight = BitHeaderDef.bmHeight;
-		BitInfoHeader.biPlanes = 1;
-		BitInfoHeader.biBitCount = BitHeaderDef.bmPlanes * BitHeaderDef.bmBitsPixel;// Like bit nubmer per pixel?
-		BitInfoHeader.biCompression = BI_RGB;
-		BitInfoHeader.biSizeImage = 0;
-		BitInfoHeader.biXPelsPerMeter = 0;
-		BitInfoHeader.biYPelsPerMeter = 0;
-		BitInfoHeader.biClrUsed = 0;
-		BitInfoHeader.biClrImportant = 0;
-
-		// Cannot allocated in a whole size from the first place.
-		// As the first step, allocated as info header size and pallete.
-		int32 PalSize = (BitInfoHeader.biBitCount > 8 ? 0 : 1 << BitInfoHeader.biBitCount) * sizeof(RGBQUAD);
-		BITMAPINFO* RetBitInfo = (BITMAPINFO *)malloc(BitInfoHeader.biSize + PalSize);
-		RetBitInfo->bmiHeader = BitInfoHeader;
-
-		// Not get the size of bitmap to resize BITMAPINFO allocation
-		GetDIBits(WholeScreenDC, InHBit, 0, BitHeaderDef.bmHeight, NULL, RetBitInfo, DIB_RGB_COLORS);
-		BitInfoHeader = RetBitInfo->bmiHeader;
-
-		// Just for a case if somethings wrong.
-		if (BitInfoHeader.biSizeImage == 0) {
-			BitInfoHeader.biSizeImage = ((((BitInfoHeader.biWidth * BitInfoHeader.biBitCount) + 31) & ~31) >> 3) * BitInfoHeader.biHeight;
+		~FDesktopCaptureGdiState()
+		{
+			Release();
 		}
 
-		// Re-allocation now we know that the final size.
-		DWORD BitSizeByte = BitInfoHeader.biSize + PalSize + BitInfoHeader.biSizeImage;
-		RetBitInfo = (BITMAPINFO *)realloc(RetBitInfo, BitSizeByte);
+		void Release()
+		{
+			if (MemDC != nullptr && PrevBitmap != nullptr)
+			{
+				// Restore the DC's original bitmap, otherwise ours stays selected and cannot be deleted.
+				SelectObject(MemDC, PrevBitmap);
+			}
+			PrevBitmap = nullptr;
 
-		// Everythings ready, get the data.
-		GetDIBits(WholeScreenDC, InHBit, 0, BitHeaderDef.bmHeight, (PBYTE)RetBitInfo + BitInfoHeader.biSize + PalSize, RetBitInfo, DIB_RGB_COLORS);
-		
-		ReleaseDC(nullptr, WholeScreenDC);
-		
-		return RetBitInfo;
-	}
+			if (CapturedBitmap != nullptr)
+			{
+				DeleteObject(CapturedBitmap);
+				CapturedBitmap = nullptr;
+			}
+			CapturedBits = nullptr;
+
+			if (MemDC != nullptr)
+			{
+				DeleteDC(MemDC);
+				MemDC = nullptr;
+			}
+			if (ScreenDC != nullptr)
+			{
+				DeleteDC(ScreenDC);
+				ScreenDC = nullptr;
+			}
+
+			Width = 0;
+			Height = 0;
+		}
+
+		/** Rebuilds only on the first call or when the desktop resolution changed. */
+		bool EnsureForSize(int32 InWidth, int32 InHeight)
+		{
+			if (InWidth <= 0 || InHeight <= 0)
+			{
+				return false;
+			}
+
+			if (CapturedBits != nullptr && Width == InWidth && Height == InHeight)
+			{
+				return true;
+			}
+
+			Release();
+
+			ScreenDC = ::CreateDC(TEXT("DISPLAY"), nullptr, nullptr, nullptr);
+			if (ScreenDC == nullptr)
+			{
+				return false;
+			}
+
+			MemDC = CreateCompatibleDC(ScreenDC);
+			if (MemDC == nullptr)
+			{
+				Release();
+				return false;
+			}
+
+			BITMAPINFO BitmapInfo = {};
+			BitmapInfo.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+			BitmapInfo.bmiHeader.biWidth = InWidth;
+			// POSITIVE height = bottom-up rows, which is exactly what the staging step already compensates
+			// for when it flips Y. Kept deliberately so this stays a drop-in replacement; a negative height
+			// would hand back top-down rows and silently invert the whole image.
+			BitmapInfo.bmiHeader.biHeight = InHeight;
+			BitmapInfo.bmiHeader.biPlanes = 1;
+			BitmapInfo.bmiHeader.biBitCount = 32;
+			BitmapInfo.bmiHeader.biCompression = BI_RGB;
+
+			CapturedBitmap = CreateDIBSection(ScreenDC, &BitmapInfo, DIB_RGB_COLORS, &CapturedBits, nullptr, 0);
+			if (CapturedBitmap == nullptr || CapturedBits == nullptr)
+			{
+				Release();
+				return false;
+			}
+
+			PrevBitmap = SelectObject(MemDC, CapturedBitmap);
+
+			Width = InWidth;
+			Height = InHeight;
+			return true;
+		}
+	};
+
+	static FDesktopCaptureGdiState GDesktopCaptureGdiState;
 
 	/** The main function that capture the whole desktop image of primary display,
 	 * OutCapturedImageData is supposed to be in the size of primary display or it will be reallocated anyway. 
@@ -265,41 +332,35 @@ namespace WendyWindowsDesktopCaptureImpl
 		// It should be physical resolution not being affected by display scale.
 		UWendyDesktopImageComponent::GetPrimaryMonitorResolution(PrimDisplayWidth, PrimDisplayHeight, true);
 
-		// I just copied the rest of code from some place..
-		HDC hScrDC = ::CreateDC(TEXT("DISPLAY"), nullptr, nullptr, nullptr); // Does that specified name do some?
-		HDC hMemDC = CreateCompatibleDC(hScrDC);
-		HBITMAP hBitmap = CreateCompatibleBitmap(hScrDC, PrimDisplayWidth, PrimDisplayHeight);
-		SelectObject(hMemDC, hBitmap);
+		if (false == GDesktopCaptureGdiState.EnsureForSize(PrimDisplayWidth, PrimDisplayHeight))
+		{
+			return;
+		}
 
 		{
 			SCOPE_CYCLE_COUNTER(STAT_CapturePrimaryDisplay_BitBlt);
-			BitBlt(hMemDC, 0, 0, PrimDisplayWidth, PrimDisplayHeight, hScrDC, 0, 0, SRCCOPY);
+			BitBlt(GDesktopCaptureGdiState.MemDC, 0, 0, PrimDisplayWidth, PrimDisplayHeight,
+				GDesktopCaptureGdiState.ScreenDC, 0, 0, SRCCOPY);
 		}
 
-		BITMAPINFO* BitInfoData = GetBitmapInfoFromHBitmap(hBitmap);
-		if (BitInfoData != nullptr)
+		const int32 OutArraySize = PrimDisplayWidth * PrimDisplayHeight;
+		if (OutCapturedImageData.Num() != OutArraySize)
 		{
-			const int32 OutArraySize = PrimDisplayWidth * PrimDisplayHeight;
-			if (OutCapturedImageData.Num() != OutArraySize)
-			{
-				OutCapturedImageData.Empty();
-				OutCapturedImageData.AddZeroed(OutArraySize);
-			}
-
-			// It assumes that RGBA is aligned in the same order.
-			FMemory::Memcpy(OutCapturedImageData.GetData(), BitInfoData->bmiColors, OutArraySize * sizeof(FColor));
-			// RGBA order matches indeed, but it is reversed in element order,
-			// Even simple reversing cannot help, it is only upside down.
-			// Algo::Reverse(OutCapturedImageData);
-
-			// This is allocated from inside. Should manually free it.
-			// @TODO Wendy DesktopCapture : It might not have to be allocated and released everytime?
-			free(BitInfoData);
-			BitInfoData = nullptr;
+			OutCapturedImageData.Empty();
+			OutCapturedImageData.AddZeroed(OutArraySize);
 		}
 
-		DeleteDC(hMemDC);
-		DeleteDC(hScrDC);
+		{
+			SCOPE_CYCLE_COUNTER(STAT_CapturePrimaryDisplay_FlushAndCopy);
+
+			// GDI batches drawing, so the BitBlt above is not guaranteed to have reached the DIB section's
+			// memory until this returns.
+			GdiFlush();
+
+			// One copy, straight out of the DIB section. Assumes RGBA ordering matches, as the old path did.
+			FMemory::Memcpy(OutCapturedImageData.GetData(), GDesktopCaptureGdiState.CapturedBits,
+				OutArraySize * sizeof(FColor));
+		}
 	}
 }
 using namespace WendyWindowsDesktopCaptureImpl;
