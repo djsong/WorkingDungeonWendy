@@ -1,4 +1,4 @@
-﻿// Copyright Working Dungeon Wendy, by DJ Song
+// Copyright Working Dungeon Wendy, by DJ Song
 
 #include "WendyDesktopImageComponent.h"
 #include "Engine/Texture2D.h"
@@ -21,12 +21,16 @@
 #include <wingdi.h>
 #endif // PLATFORM_WINDOWS
 
+DECLARE_CYCLE_STAT(TEXT("CapturePrimaryDisplay"), STAT_CapturePrimaryDisplay, STATGROUP_WendyGame);
+DECLARE_CYCLE_STAT(TEXT("CapturePrimaryDisplay_BitBlt"), STAT_CapturePrimaryDisplay_BitBlt, STATGROUP_WendyGame);
 DECLARE_CYCLE_STAT(TEXT("UpdateDesktopCapture"), STAT_UpdateLocalDesktopCaptureStaging, STATGROUP_WendyGame);
 DECLARE_CYCLE_STAT(TEXT("UpdateOuputTexture"), STAT_UpdateOuputTexture, STATGROUP_WendyGame);
 // Split in two on purpose: the whole point of checking before packing is that the diff cost should now
 // dominate and the pack cost should shrink. Separate counters make that visible in `stat WendyGame`.
 DECLARE_CYCLE_STAT(TEXT("ReplicateRegionDiffCheck"), STAT_ReplicateRegionDiffCheck, STATGROUP_WendyGame);
 DECLARE_CYCLE_STAT(TEXT("PackReplicateRegion"), STAT_PackReplicateRegion, STATGROUP_WendyGame);
+
+
 
 FIntPoint GetWendyDesktopImageSize()
 {
@@ -254,6 +258,8 @@ namespace WendyWindowsDesktopCaptureImpl
 	 * #WendyDealsWithPrimaryDisplayOnly */
 	void GetPrimaryDisplayCapturedData(TArray<FColor>& OutCapturedImageData)
 	{
+		SCOPE_CYCLE_COUNTER(STAT_CapturePrimaryDisplay);
+
 		int32 PrimDisplayWidth = 0;
 		int32 PrimDisplayHeight = 0;
 		// It should be physical resolution not being affected by display scale.
@@ -265,7 +271,10 @@ namespace WendyWindowsDesktopCaptureImpl
 		HBITMAP hBitmap = CreateCompatibleBitmap(hScrDC, PrimDisplayWidth, PrimDisplayHeight);
 		SelectObject(hMemDC, hBitmap);
 
-		BitBlt(hMemDC, 0, 0, PrimDisplayWidth, PrimDisplayHeight, hScrDC, 0, 0, SRCCOPY);
+		{
+			SCOPE_CYCLE_COUNTER(STAT_CapturePrimaryDisplay_BitBlt);
+			BitBlt(hMemDC, 0, 0, PrimDisplayWidth, PrimDisplayHeight, hScrDC, 0, 0, SRCCOPY);
+		}
 
 		BITMAPINFO* BitInfoData = GetBitmapInfoFromHBitmap(hBitmap);
 		if (BitInfoData != nullptr)
