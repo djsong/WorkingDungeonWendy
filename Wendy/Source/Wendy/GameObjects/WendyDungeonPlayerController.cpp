@@ -1,6 +1,7 @@
 // Copyright Working Dungeon Wendy, by DJ Song
 
 #include "WendyDungeonPlayerController.h"
+#include "Wendy.h"
 #include "EngineUtils.h"
 #include "GameFramework/PlayerInput.h"
 #include "WdGameplayStatics.h"
@@ -11,9 +12,12 @@
 #include "WendyDungeonSeat.h"
 #include "WendyGameInstance.h"
 #include "WendyUIDungeonSeatSelection.h"
+#include "WendyDungeonGameState.h"
 #if PLATFORM_WINDOWS
 #include <Windows.h>
 #endif
+
+DECLARE_CYCLE_STAT(TEXT("WendyDungeonPlayerController Tick"), STAT_WendyDungeonPlayerControllerTick, STATGROUP_WendyGame);
 
 static TAutoConsoleVariable<float> CVarWdDungeonSeatPickingDist(
 	TEXT("wd.DungeonSeatPickingDist"),
@@ -89,6 +93,8 @@ void AWendyDungeonPlayerController::OnPossess(APawn* aPawn)
 
 void AWendyDungeonPlayerController::PlayerTick(float DeltaTime)
 {
+	SCOPE_CYCLE_COUNTER(STAT_WendyDungeonPlayerControllerTick);
+
 	Super::PlayerTick(DeltaTime);
 
 	if (IsInFocusingMode())
@@ -563,6 +569,17 @@ void AWendyDungeonPlayerController::UpdateFocusingDisplayHitUV()
 		{
 			FCollisionQueryParams CollisionQueryParams(SCENE_QUERY_STAT(ClickableTrace), true);
 			CollisionQueryParams.bReturnFaceIndex = true; //<- Needed for HitUV result.
+
+			TArray<AWendyCharacter*> AllWdCharInWorld;
+			if (AWendyDungeonGameState* DungeonGS = Cast<AWendyDungeonGameState>(UWdGameplayStatics::GetGameState(this)))
+			{
+				DungeonGS->GetAllValidWdCharacterInWorld(AllWdCharInWorld);
+			}
+			for (const AWendyCharacter* WdChar : AllWdCharInWorld)
+			{
+				CollisionQueryParams.AddIgnoredActor(WdChar);
+			}
+
 			if (GetHitResultAtScreenPosition(MousePosition, ECC_WorldStatic, CollisionQueryParams, UnderCursorHitRes))
 			{
 				AWendyDungeonSeat* HitActorAsDungeonSeat = Cast<AWendyDungeonSeat>(UnderCursorHitRes.GetActor());

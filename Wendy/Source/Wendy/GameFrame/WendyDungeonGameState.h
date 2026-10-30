@@ -8,6 +8,7 @@
 
 class UWendyUIDungeonSeatSelection;
 class UWendyHudUI;
+class AWendyCharacter;
 
 /** Some flow state for dungeon game.. Not really need to be replicated? */
 UENUM()
@@ -52,10 +53,19 @@ protected:
 	UPROPERTY(Transient)
 	EWendyDungeonPhase CurrentPhase;
 
+	/** Being registered when a WendyCharacter spawned in a world.
+	 * I don't mean to this being a GC holder, so declaring it as TWeakObjectPtr */
+	TArray<TWeakObjectPtr<AWendyCharacter>> AllWdCharacterInWorld;
+
 public:
 	AWendyDungeonGameState(const FObjectInitializer& ObjectInitializer);
 
 	virtual void BeginPlay() override;
+
+	void AddWdCharacter(AWendyCharacter* InNewCharacter);
+	void RemoveWdCharacter(AWendyCharacter* InNewCharacter);
+	/** It might not be the simple copy of AllWdCharacterInWorld. Invalid (staled) object won't be included */
+	void GetAllValidWdCharacterInWorld(TArray<AWendyCharacter*>& OutResult) const;
 
 protected:
 	void CreateSeatSelectionUI();

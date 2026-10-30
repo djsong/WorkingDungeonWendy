@@ -24,6 +24,7 @@
 #include "WendyImageRepNetwork.h"
 #include "WendyImageRepPackets.h"
 #include "WendyGameInstance.h"
+#include "WendyDungeonGameState.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogWendyCharacter, Log, All);
 
@@ -317,6 +318,11 @@ void AWendyCharacter::BeginPlay()
 			AsWChar->OnNewCharacterAppears(this);
 		}
 	}
+
+	if (AWendyDungeonGameState* DungeonGS = Cast<AWendyDungeonGameState>(UWdGameplayStatics::GetGameState(this)))
+	{
+		DungeonGS->AddWdCharacter(this);
+	}
 }
 
 void AWendyCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -353,6 +359,11 @@ void AWendyCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 		HomeSeat->SetOwnerCharacter(this);
 		HomeSeat->FallbackToOffState();
 		HomeSeat = nullptr;
+	}
+
+	if (AWendyDungeonGameState* DungeonGS = Cast<AWendyDungeonGameState>(UWdGameplayStatics::GetGameState(this)))
+	{
+		DungeonGS->RemoveWdCharacter(this);
 	}
 }
 

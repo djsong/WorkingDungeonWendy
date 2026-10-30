@@ -26,6 +26,33 @@ void AWendyDungeonGameState::BeginPlay()
 	GoToSeatSelection();
 }
 
+void AWendyDungeonGameState::AddWdCharacter(AWendyCharacter* InNewCharacter)
+{ 
+	if (InNewCharacter)
+	{
+		AllWdCharacterInWorld.AddUnique(TWeakObjectPtr<AWendyCharacter>(InNewCharacter));
+	}
+}
+
+void AWendyDungeonGameState::RemoveWdCharacter(AWendyCharacter* InNewCharacter)
+{
+	if (InNewCharacter)
+	{
+		AllWdCharacterInWorld.Remove(TWeakObjectPtr<AWendyCharacter>(InNewCharacter));
+	}
+}
+
+void AWendyDungeonGameState::GetAllValidWdCharacterInWorld(TArray<AWendyCharacter*>& OutResult) const
+{
+	for (const auto WdChar : AllWdCharacterInWorld)
+	{
+		if (WdChar.IsValid())
+		{
+			OutResult.Add(WdChar.Get());
+		}
+	}
+}
+
 void AWendyDungeonGameState::CreateSeatSelectionUI()
 {
 	UWorld* OwnerWorld = GetWorld();
