@@ -4,6 +4,11 @@
 #include "Engine/Texture2D.h"
 #include "Framework/Application/SlateApplication.h"
 #include "HAL/PlatformApplicationMisc.h"
+#include "HAL/PlatformProcess.h"
+#include "HAL/Runnable.h"
+#include "HAL/RunnableThread.h"
+#include "HAL/ThreadSafeCounter.h"
+#include "Misc/ScopeLock.h"
 #include "WdGameplayStatics.h"
 #include "Wendy.h"
 #include "WendyCharacter.h"
@@ -71,6 +76,15 @@ static TAutoConsoleVariable<float> CVarWdDesktopCaptureBasePeriod(
 	TEXT("A base interval to capture the desktop image, the first and fundamental step to acqure desktop image.")
 	TEXT("Having this interval variable means that image capturing is not incremental."),
 	ECVF_Default);
+static TAutoConsoleVariable<int32> CVarWdDesktopCaptureThreaded(
+	TEXT("wd.DesktopCapture.Threaded"),
+	1,
+	TEXT("Capture the desktop on a dedicated worker thread instead of inline on the game thread.")
+	TEXT(" The BitBlt costs the same either way - this only moves it off the critical path, which is the point,")
+	TEXT(" since it was measured at tens of milliseconds per capture. Switchable at runtime: the worker is")
+	TEXT(" started and stopped as this changes, and the inline path is restored exactly as it was when off."),
+	ECVF_Default);
+
 static TAutoConsoleVariable<float> CVarWdDesktopCaptureBasePeriod_RandFrac(
 	TEXT("wd.DesktopCaptureBasePeriod_RandFrac"),
 	0.0f,
@@ -362,6 +376,133 @@ namespace WendyWindowsDesktopCaptureImpl
 				OutArraySize * sizeof(FColor));
 		}
 	}
+
+	/**
+	 * Runs GetPrimaryDisplayCapturedData off the game thread.
+	 *
+	 * The capture is not made any cheaper by this - BitBlt costs what it costs - it simply stops a ~30 ms
+	 * synchronous blit from sitting in the middle of the game thread's frame.
+	 *
+	 * Buffers rotate by Swap rather than copy, so no frame is ever duplicated: the worker fills WorkerFrame,
+	 * swaps it with PublishedFrame, and the game thread swaps PublishedFrame with its own destination. Each
+	 * swap hands the previous buffer back to be refilled, so three buffers circulate and nothing allocates
+	 * after the first few frames. The lock is only ever held for those swaps, never across the blit.
+	 *
+	 * Thread-safety of the capture itself was checked: GetSystemMetrics, EnumDisplaySettings and the GDI calls
+	 * are all plain Win32 with no Slate or UE display-metrics involvement. The cached GDI state is file-static
+	 * and therefore NOT safe for both paths at once, which is why switching modes stops this worker first.
+	 */
+	class FWendyDesktopCaptureWorker : public FRunnable
+	{
+	public:
+		virtual bool Init() override
+		{
+			return true;
+		}
+
+		virtual uint32 Run() override
+		{
+			while (StopCounter.GetValue() == 0)
+			{
+				const double CaptureBeginTime = FPlatformTime::Seconds();
+
+				GetPrimaryDisplayCapturedData(WorkerFrame);
+
+				if (WorkerFrame.Num() > 0)
+				{
+					FScopeLock PublishedFrameLock(&PublishedFrameMutex);
+					Swap(PublishedFrame, WorkerFrame);
+					bHasNewFrame = true;
+				}
+
+				// Pace to the same period the game thread used to capture at, so this doesn't just spin a core
+				// flat out. Slept in slices so Stop() isn't left waiting out a whole period.
+				const float BaseCapturePeriod = CVarWdDesktopCaptureBasePeriod.GetValueOnAnyThread();
+				const double RemainingSeconds = BaseCapturePeriod - (FPlatformTime::Seconds() - CaptureBeginTime);
+				for (double SleptSeconds = 0.0; SleptSeconds < RemainingSeconds; SleptSeconds += 0.005)
+				{
+					if (StopCounter.GetValue() != 0)
+					{
+						break;
+					}
+					FPlatformProcess::Sleep(0.005f);
+				}
+			}
+
+			return 0;
+		}
+
+		virtual void Stop() override
+		{
+			StopCounter.Increment();
+		}
+
+		/** Game thread: takes the newest finished frame, if there is one. Returns false when the worker hasn't
+		 * produced anything since the last call, in which case the caller simply keeps the frame it has. */
+		bool TryConsumeLatestFrame(TArray<FColor>& InOutFrame)
+		{
+			FScopeLock PublishedFrameLock(&PublishedFrameMutex);
+			if (false == bHasNewFrame)
+			{
+				return false;
+			}
+
+			Swap(InOutFrame, PublishedFrame);
+			bHasNewFrame = false;
+			return true;
+		}
+
+	private:
+		FThreadSafeCounter StopCounter;
+
+		FCriticalSection PublishedFrameMutex;
+		/** Guarded by PublishedFrameMutex. */
+		TArray<FColor> PublishedFrame;
+		bool bHasNewFrame = false;
+
+		/** Worker thread only. */
+		TArray<FColor> WorkerFrame;
+	};
+
+	static TUniquePtr<FWendyDesktopCaptureWorker> GDesktopCaptureWorker;
+	static FRunnableThread* GDesktopCaptureThread = nullptr;
+
+	bool IsDesktopCaptureWorkerRunning()
+	{
+		return (GDesktopCaptureThread != nullptr);
+	}
+
+	void StartDesktopCaptureWorker()
+	{
+		if (IsDesktopCaptureWorkerRunning())
+		{
+			return;
+		}
+
+		GDesktopCaptureWorker = MakeUnique<FWendyDesktopCaptureWorker>();
+		GDesktopCaptureThread = FRunnableThread::Create(GDesktopCaptureWorker.Get(), TEXT("WendyDesktopCaptureThread"));
+
+		if (GDesktopCaptureThread == nullptr)
+		{
+			// Couldn't get a thread; drop back to capturing inline rather than silently stopping.
+			GDesktopCaptureWorker.Reset();
+			UE_LOG(LogWendy, Warning, TEXT("Failed to create the desktop capture thread; capturing on the game thread instead."));
+		}
+	}
+
+	void StopDesktopCaptureWorker()
+	{
+		if (GDesktopCaptureThread != nullptr)
+		{
+			// Blocks until the worker is out of GetPrimaryDisplayCapturedData, which is what makes it safe for
+			// the game thread to start using the shared GDI state again.
+			GDesktopCaptureThread->Kill(true);
+			delete GDesktopCaptureThread;
+			GDesktopCaptureThread = nullptr;
+		}
+
+		GDesktopCaptureWorker.Reset();
+	}
 }
 using namespace WendyWindowsDesktopCaptureImpl;
 #else
@@ -489,6 +630,17 @@ void UWendyDesktopImageComponent::UpdateLocalDesktopCaptureStaging()
 	bDirtyForTextureUpdate = true;
 }
 
+void UWendyDesktopImageComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+#if PLATFORM_WINDOWS
+	// Shared across components (only the locally controlled one ever captures), so stopping it here is safe:
+	// whoever captures next will start it again on demand.
+	StopDesktopCaptureWorker();
+#endif
+
+	Super::EndPlay(EndPlayReason);
+}
+
 void UWendyDesktopImageComponent::CaptureDesktopImageTimerFn()
 {
 	UWorld* OwnerWorld = GetWorld();
@@ -516,7 +668,31 @@ void UWendyDesktopImageComponent::CaptureDesktopImageTimerFn()
 void UWendyDesktopImageComponent::CaptureDesktopImage()
 {
 #if PLATFORM_WINDOWS
-	GetPrimaryDisplayCapturedData(RawCapturedSourceImageData);
+	bool bConsumedAsyncCaptureFrame = false;
+	if (CVarWdDesktopCaptureThreaded.GetValueOnGameThread() > 0)
+	{
+		StartDesktopCaptureWorker();
+
+		if (IsDesktopCaptureWorkerRunning())
+		{
+			// Just collect whatever the worker has finished. When it hasn't produced a new frame yet we keep
+			// the one we already have, which is exactly what the inline path effectively did between captures.
+			GDesktopCaptureWorker->TryConsumeLatestFrame(RawCapturedSourceImageData);
+			bConsumedAsyncCaptureFrame = true;
+		}
+		// Falls through to the inline capture if the thread couldn't be created.
+	}
+	else
+	{
+		// Stops and JOINS before capturing inline, because both paths share the cached GDI state and only one
+		// of them may touch it.
+		StopDesktopCaptureWorker();
+	}
+
+	if (bConsumedAsyncCaptureFrame == false)
+	{
+		GetPrimaryDisplayCapturedData(RawCapturedSourceImageData);
+	}
 #else
 
 	// For other platforms?? Probably not.
