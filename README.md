@@ -14,6 +14,11 @@ Some textures are surely missing but that won't be a big problem for the least f
 
 --------------------------------
 
+2026.10.31
+Recently gone through various image replication and game thread optimization. 
+Game thread is noticeably faster so we can expect up to 60fps in moderate CPU (it was like under 30fps before), but image replication is still not much fast.
+In addition, remote input is now possible from client too.
+
 2026.08.30
 Basic voice chat support
 
