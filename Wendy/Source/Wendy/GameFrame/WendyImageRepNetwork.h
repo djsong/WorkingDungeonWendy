@@ -1,4 +1,4 @@
-// Copyright Working Dungeon Wendy, by DJ Song
+﻿// Copyright Working Dungeon Wendy, by DJ Song
 
 #pragma once
 
@@ -26,6 +26,15 @@ const int32 RECEIVE_SEND_BUFFER_SIZE = MAX_PACKET_SIZE * 1000;
  * which at a few MB/s is hundreds of milliseconds. That is the shape of the intermittent remote-input stalls.
  * Set 0 to get exactly the old behaviour back. */
 #define WD_PRIORITIZED_INPUT_SEND 1
+
+/** 0 = original: remote input only ever flows server -> client, so only the server can drive a desktop.
+ * 1 = clients can send remote input too. A client sends to the server; the server either applies it locally
+ *     (when it is the addressed user) or stages it for relay, at which point the EXISTING server send path
+ *     forwards it unchanged - which is what makes client -> client driving nearly free.
+ *
+ * `FWendyImageRepPacket_RemoteInput::TargetUserId` was always the routing field; it just had nothing to route
+ * to before. Whoever is being driven can refuse with wd.RemoteInput.BlockIncoming. */
+#define WD_BIDIRECTIONAL_REMOTE_INPUT 1
 
 #if WD_PRIORITIZED_INPUT_SEND
 /** Control packets are tiny (remote input ~80 bytes, user info ~34), so this holds hundreds of them. */
@@ -150,8 +159,16 @@ private:
 	 * InMaxUsableBytes is how far into SendBuffer this packet may write, so the same routine serves both the
 	 * big image buffer and the small control one. */
 	static bool WrappedSendAction(FWendyImageRepPacketBase* SendPacket, FSocket* InSocket, FInternetAddr& InAddr, uint8* SendBuffer, uint32& SendBufferPointer, uint32 InMaxUsableBytes);
-	/** Pushes whatever remote input the game thread has staged to the clients it is aimed at. */
+	/** Pushes whatever remote input the game thread has staged to the clients it is aimed at. Anything left
+	 * over addressed nobody connected and is dropped - remote input is only useful immediately. */
 	void SendStagedRemoteInputToClients();
+#if WD_BIDIRECTIONAL_REMOTE_INPUT
+	/** Client side: hands staged remote input to the server, which applies or relays it by TargetUserId. */
+	void SendStagedRemoteInputToServer();
+#endif
+	/** False when wd.RemoteInput.BlockIncoming is set, i.e. this machine refuses to be driven. Checked where
+	 * incoming input is staged for local simulation, the one point everything passes through. */
+	bool ShouldAcceptIncomingRemoteInput() const;
 	bool WrappedRecvAction_ImageData(uint8* RecvBuffer, uint32& RecvBufferReadOffset, uint32 RecvBufferPointer);
 
 	/** Coalesce a staging snapshot into Conn's per-region pending backlog (newest per owner+region wins), then feed

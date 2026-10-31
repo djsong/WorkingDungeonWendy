@@ -23,6 +23,16 @@ static TAutoConsoleVariable<int32> CVarWdImageRepNetworkClientRecvMaxLoop(
 	TEXT("Client need some recv loop to get data of multiple clients, but it might better if each client knows the number of other clients in network thread."),
 	ECVF_ReadOnly);
 
+static TAutoConsoleVariable<int32> CVarWdRemoteInputBlockIncoming(
+	TEXT("wd.RemoteInput.BlockIncoming"),
+	0,
+	TEXT("1 refuses remote input aimed at this machine, so nobody can drive this desktop. Allowed by default.")
+	TEXT(" Enforced where incoming input is staged for local simulation, which is the single place everything")
+	TEXT(" arrives regardless of whether it came straight from the sender or was relayed by the server - so it")
+	TEXT(" is this machine's own decision and needs no cooperation from anyone else.")
+	TEXT(" Does not affect driving others, nor this machine's ability to relay input on to someone else."),
+	ECVF_Default);
+
 static TAutoConsoleVariable<int32> CVarWdImageRepControlReserveBytes(
 	TEXT("wd.ImageRepNetwork.ControlReserveBytes"),
 	65536,
@@ -211,6 +221,43 @@ void FWendyImageRepNetwork::UpdateTickServer(float InDeltaSecond)
 							break;
 						}
 					}
+#if WD_BIDIRECTIONAL_REMOTE_INPUT
+					else if (AsBasePacket.PacketID == EWendyImageRepPacketType::WIRP_REMOTEINPUT)
+					{
+						// The server never used to receive input at all - this is what lets a client drive.
+						FWendyImageRepPacket_RemoteInput InputPacket;
+						if (InputPacket.SerializeFromRecvBuffer(ClientInfo.RecvBuffer, ClientInfo.RecvBufferReadOffset, ClientInfo.RecvBufferPointer))
+						{
+							FWendyMonitorHitAndInputInfo RemoteInputInfo;
+							InputPacket.ToHitAndInputInfo(RemoteInputInfo);
+
+							if (RemoteInputInfo.TargetUserId == SelfIdentification)
+							{
+								// Aimed at the server's own desktop. Same handling as a client receiving input.
+								if (ShouldAcceptIncomingRemoteInput())
+								{
+									FScopeLock Lock(&RemoteInputInfoMutex);
+									RecvStagingRemoteInoputInfo.Add(RemoteInputInfo);
+								}
+							}
+							else
+							{
+								// Aimed at somebody else, so hand it to the ordinary send staging and let the
+								// existing server send path forward it. That path already matches TargetUserId
+								// against connected clients, so client-to-client driving needs nothing new.
+								// Note this bypasses SetRemoteInputInfo deliberately: its cursor-move throttle
+								// is for traffic we ORIGINATE, and re-throttling a relay would only add lag.
+								FScopeLock Lock(&RemoteInputInfoMutex);
+								SendStagingRemoteInputInfo.Add(RemoteInputInfo);
+							}
+						}
+						else
+						{
+							// Not enough data to serialize anymore until recv again.
+							break;
+						}
+					}
+#endif
 					/*else if (PacketID == EWendyImageRepPacketType::...)
 					{
 
@@ -337,13 +384,18 @@ void FWendyImageRepNetwork::UpdateTickClient(float InDeltaSecond)
 						// It will be serialized and return true only when received enough for this packet, or recv again and serialize later.
 						if (InputPacket.SerializeFromRecvBuffer(ConnectionBase.RecvBuffer, ConnectionBase.RecvBufferReadOffset, ConnectionBase.RecvBufferPointer))
 						{
-							FScopeLock Lock(&RemoteInputInfoMutex);
-
 							FWendyMonitorHitAndInputInfo RemoteInputInfo;
 							InputPacket.ToHitAndInputInfo(RemoteInputInfo);
-							RecvStagingRemoteInoputInfo.Add(RemoteInputInfo);
 
 							ensureMsgf(RemoteInputInfo.TargetUserId == SelfIdentification, TEXT("Send remote input to wrong client? %s - %s"), *RemoteInputInfo.TargetUserId, *SelfIdentification);
+
+							// Dropped rather than staged when this machine refuses to be driven. The packet has
+							// already been consumed from the recv buffer either way, so the drain carries on.
+							if (ShouldAcceptIncomingRemoteInput())
+							{
+								FScopeLock Lock(&RemoteInputInfoMutex);
+								RecvStagingRemoteInoputInfo.Add(RemoteInputInfo);
+							}
 						}
 						else
 						{
@@ -403,10 +455,51 @@ void FWendyImageRepNetwork::UpdateTickClient(float InDeltaSecond)
 		SendStagingReplicateInfo.Reset();
 	}
 
+#if WD_BIDIRECTIONAL_REMOTE_INPUT
+	// Before the image feed, for the same reason the server does it in that order.
+	SendStagedRemoteInputToServer();
+#endif
+
 	FeedConnectionFromStaging(ConnectionBase, LocalSendStaging);
 
 	DisposeTooMuchStagingData();
 }
+
+bool FWendyImageRepNetwork::ShouldAcceptIncomingRemoteInput() const
+{
+	return (CVarWdRemoteInputBlockIncoming.GetValueOnAnyThread() <= 0);
+}
+
+#if WD_BIDIRECTIONAL_REMOTE_INPUT
+void FWendyImageRepNetwork::SendStagedRemoteInputToServer()
+{
+	if (SendStagingRemoteInputInfo.Num() <= 0)
+	{
+		return;
+	}
+
+	FScopeLock Lock(&RemoteInputInfoMutex);
+
+	// Simpler than the server's version: there is only one place to send, and the server works out from
+	// TargetUserId whether to apply the input itself or pass it along.
+	for (const FWendyMonitorHitAndInputInfo& InputInfo : SendStagingRemoteInputInfo)
+	{
+		FWendyImageRepPacket_RemoteInput InputPacket;
+		InputPacket.FromHitAndInputInfo(InputInfo);
+
+#if WD_PRIORITIZED_INPUT_SEND
+		WrappedSendAction(&InputPacket, ConnectionBase.SocketPtr, *ConnectionBase.BoundAddr.Get(),
+			ConnectionBase.ControlSendBuffer, ConnectionBase.ControlSendBufferPointer, CONTROL_SEND_BUFFER_SIZE);
+#else
+		WrappedSendAction(&InputPacket, ConnectionBase.SocketPtr, *ConnectionBase.BoundAddr.Get(),
+			ConnectionBase.SendBuffer, ConnectionBase.SendBufferPointer, RECEIVE_SEND_BUFFER_SIZE);
+#endif
+	}
+
+	// Everything had a single destination, so nothing can be left undelivered.
+	SendStagingRemoteInputInfo.Reset();
+}
+#endif
 
 void FWendyImageRepNetwork::SetSendImageInfo(const FString& ImageOwnerId, const FWendyDesktopImageReplicateInfo& ImageReplicateInfoToSend
 )
@@ -453,7 +546,13 @@ void FWendyImageRepNetwork::MarkClientRemove(const FString& InClientId)
 void FWendyImageRepNetwork::SetRemoteInputInfo(const FWendyMonitorHitAndInputInfo& InInfo)
 {
 	if (InInfo.HasValidInfo()
-		&& bIsServer // <- We might extend it for client too?
+#if !WD_BIDIRECTIONAL_REMOTE_INPUT
+		&& bIsServer // <- We might extend it for client too?  (now done - see WD_BIDIRECTIONAL_REMOTE_INPUT)
+#endif
+		// Driving your own desktop is a feedback loop rather than a feature. It also kept self-addressed
+		// entries piling up in the send staging forever, because the server's send loop only ever matched
+		// TargetUserId against OTHER clients and so never removed them.
+		&& InInfo.TargetUserId != SelfIdentification
 		)
 	{
 		const double CurrTime = FPlatformTime::Seconds();
@@ -686,6 +785,17 @@ void FWendyImageRepNetwork::SendStagedRemoteInputToClients()
 				SendStagingRemoteInputInfo.RemoveAt(InfoIdx);
 			}
 		}
+	}
+
+	// Whatever is still here addressed nobody currently connected - a client that left, or this machine
+	// itself. Previously those entries were only ever removed on a match, so they accumulated FOREVER:
+	// DisposeTooMuchStagingData only prunes the image staging, never this. Dropping them is right rather
+	// than merely tidy, because remote input is only meaningful immediately; holding it serves nobody.
+	if (SendStagingRemoteInputInfo.Num() > 0)
+	{
+		UE_LOG(LogWendyImageRepNetwork, Verbose, TEXT("Dropping %d remote input info(s) addressed to nobody connected."),
+			SendStagingRemoteInputInfo.Num());
+		SendStagingRemoteInputInfo.Reset();
 	}
 }
 
