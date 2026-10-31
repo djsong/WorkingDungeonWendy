@@ -1,4 +1,4 @@
-// Copyright Working Dungeon Wendy, by DJ Song
+﻿// Copyright Working Dungeon Wendy, by DJ Song
 
 #include "WendyImageRepNetwork.h"
 #include "HAL/PlatformProcess.h" // For FPlatformProcess::Sleep()
@@ -59,7 +59,14 @@ void FWendyImageRepNetwork::InitAndOpenConnection()
 		int32 ReceiveSizeSet = 0;
 		ConnectionBase.SocketPtr->SetReceiveBufferSize(RECEIVE_SEND_BUFFER_SIZE, ReceiveSizeSet);
 		int32 SendSizeSet = 0;
+#if WD_PRIORITIZED_INPUT_SEND
+		// Kept shallow on purpose: whatever the OS has queued is already past our control, so a megabyte of
+		// socket buffer means a megabyte of image data can precede an input packet no matter how we order our
+		// own writes.
+		ConnectionBase.SocketPtr->SetSendBufferSize(SOCKET_SEND_BUFFER_SIZE, SendSizeSet);
+#else
 		ConnectionBase.SocketPtr->SetSendBufferSize(RECEIVE_SEND_BUFFER_SIZE, SendSizeSet);
+#endif
 		UE_LOG(LogWendyImageRepNetwork, Log, TEXT("Socket ReceiveBufferSize %d, SendBufferSize %d"), ReceiveSizeSet, SendSizeSet);
 
 		if (bIsServer)
@@ -276,6 +283,12 @@ void FWendyImageRepNetwork::UpdateTickServer(float InDeltaSecond)
 		SendStagingReplicateInfo.Reset();
 	}
 
+#if WD_PRIORITIZED_INPUT_SEND
+	// Before the image feed, so this tick's input reaches the socket ahead of this tick's image bytes rather
+	// than behind them.
+	SendStagedRemoteInputToClients();
+#endif
+
 	// Coalesce the snapshot into each client's per-region backlog and feed SendBuffer at its own drain rate.
 	// Each client has an independent backlog + SendBuffer, so a slow client keeps more pending without
 	// stalling a fast one, and no client's SendBuffer is ever over-stuffed (requeue-on-full inside).
@@ -284,30 +297,9 @@ void FWendyImageRepNetwork::UpdateTickServer(float InDeltaSecond)
 		FeedConnectionFromStaging(ConnectedClients[ClientIdx], LocalSendStaging);
 	}
 
-	// Input data won't be that frequent like image data, so check its size first.
-	if(SendStagingRemoteInputInfo.Num() > 0)
-	{
-		FScopeLock Lock(&RemoteInputInfoMutex);
-		for (int32 ClientIdx = 0; ClientIdx < ConnectedClients.Num(); ++ClientIdx)
-		{
-			FWendyBoundSocketAndRelevantInfo& ClientInfo = ConnectedClients[ClientIdx];
-			// Intentionally from the back, because array element will be removed inside of loop
-			for (int32 InfoIdx = SendStagingRemoteInputInfo.Num() - 1; InfoIdx >= 0; --InfoIdx)
-			{
-				const FWendyMonitorHitAndInputInfo& InputInfo = SendStagingRemoteInputInfo[InfoIdx];
-				// Unlike image info, Input info is being sent to target client only.
-				if (InputInfo.TargetUserId == ClientInfo.UserIdentification)
-				{
-					FWendyImageRepPacket_RemoteInput InputPacket;
-					InputPacket.FromHitAndInputInfo(InputInfo);
-					WrappedSendAction(&InputPacket, ClientInfo.SocketPtr, *ClientInfo.BoundAddr.Get(), ClientInfo.SendBuffer, ClientInfo.SendBufferPointer);
-
-					// Sent then remove.
-					SendStagingRemoteInputInfo.RemoveAt(InfoIdx);
-				}
-			}
-		}
-	}
+#if !WD_PRIORITIZED_INPUT_SEND
+	SendStagedRemoteInputToClients();
+#endif
 
 	DisposeTooMuchStagingData();
 }
@@ -596,9 +588,9 @@ bool FWendyImageRepNetwork::RawSendAction(FSocket* InSocket, FInternetAddr& InAd
 	return false;
 }
 
-bool FWendyImageRepNetwork::WrappedSendAction(FWendyImageRepPacketBase* SendPacket, FSocket* InSocket, FInternetAddr& InAddr, uint8* SendBuffer, uint32& SendBufferPointer)
+bool FWendyImageRepNetwork::WrappedSendAction(FWendyImageRepPacketBase* SendPacket, FSocket* InSocket, FInternetAddr& InAddr, uint8* SendBuffer, uint32& SendBufferPointer, uint32 InMaxUsableBytes)
 {
-	if (SendPacket->SerializeToSendBuffer(SendBuffer, SendBufferPointer, RECEIVE_SEND_BUFFER_SIZE))
+	if (SendPacket->SerializeToSendBuffer(SendBuffer, SendBufferPointer, InMaxUsableBytes))
 	{
 		// Append, push once, don't wait. The loop in the #else below keeps going until the WHOLE buffer is
 		// empty, sleeping 1ms every 10th attempt - fine when this was the only sender and the buffer held one
@@ -659,8 +651,51 @@ void FWendyImageRepNetwork::DrainSendBufferNonBlocking(FSocket* InSocket, FInter
 	}
 }
 
+void FWendyImageRepNetwork::SendStagedRemoteInputToClients()
+{
+	// Input data won't be that frequent like image data, so check its size first.
+	if (SendStagingRemoteInputInfo.Num() <= 0)
+	{
+		return;
+	}
+
+	FScopeLock Lock(&RemoteInputInfoMutex);
+	for (int32 ClientIdx = 0; ClientIdx < ConnectedClients.Num(); ++ClientIdx)
+	{
+		FWendyBoundSocketAndRelevantInfo& ClientInfo = ConnectedClients[ClientIdx];
+		// Intentionally from the back, because array element will be removed inside of loop
+		for (int32 InfoIdx = SendStagingRemoteInputInfo.Num() - 1; InfoIdx >= 0; --InfoIdx)
+		{
+			const FWendyMonitorHitAndInputInfo& InputInfo = SendStagingRemoteInputInfo[InfoIdx];
+			// Unlike image info, Input info is being sent to target client only.
+			if (InputInfo.TargetUserId == ClientInfo.UserIdentification)
+			{
+				FWendyImageRepPacket_RemoteInput InputPacket;
+				InputPacket.FromHitAndInputInfo(InputInfo);
+
+#if WD_PRIORITIZED_INPUT_SEND
+				// Its own queue, so it is never behind the image backlog.
+				WrappedSendAction(&InputPacket, ClientInfo.SocketPtr, *ClientInfo.BoundAddr.Get(),
+					ClientInfo.ControlSendBuffer, ClientInfo.ControlSendBufferPointer, CONTROL_SEND_BUFFER_SIZE);
+#else
+				WrappedSendAction(&InputPacket, ClientInfo.SocketPtr, *ClientInfo.BoundAddr.Get(),
+					ClientInfo.SendBuffer, ClientInfo.SendBufferPointer, RECEIVE_SEND_BUFFER_SIZE);
+#endif
+
+				// Sent then remove.
+				SendStagingRemoteInputInfo.RemoveAt(InfoIdx);
+			}
+		}
+	}
+}
+
 void FWendyImageRepNetwork::FeedConnectionFromStaging(FWendyBoundSocketAndRelevantInfo& Conn, const TMap<FString, TArray<FWendyDesktopImageReplicateInfo>>& StagingSnapshot)
 {
+#if WD_PRIORITIZED_INPUT_SEND
+	// Anything still sitting in the control queue goes out before we add more image data to the socket.
+	DrainSendBufferNonBlocking(Conn.SocketPtr, *Conn.BoundAddr.Get(), Conn.ControlSendBuffer, Conn.ControlSendBufferPointer);
+#endif
+
 	// 1) Coalesce the fresh snapshot into this connection's per-region backlog.
 	//    A newer capture of the same region overwrites the pending-but-unsent older one (newest wins),
 	//    so the backlog can never exceed one frame's worth of regions no matter how far behind the link is.
